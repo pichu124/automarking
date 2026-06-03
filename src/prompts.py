@@ -157,7 +157,9 @@ def _build_session_context(
 RUBRIC_JSON_INSTRUCTION = """\
 Return ONLY a JSON object, no prose and no markdown fences, of the form:
 {"components": [{"name": "string", "weight": number, "description": "string"}]}
-The weights MUST sum to exactly 100. Preserve the rubric's component order."""
+The weights MUST sum to exactly 100. Preserve the rubric's component order.
+Use DOUBLE QUOTES for every key and string. No single quotes, no trailing
+commas, no comments. Output valid JSON only."""
 
 GRADING_JSON_INSTRUCTION = """\
 Return ONLY a JSON object, no prose and no markdown fences, of the form:
@@ -167,7 +169,9 @@ Return ONLY a JSON object, no prose and no markdown fences, of the form:
  "total": number}
 The components MUST match the rubric components exactly, in order. "total" is
 the sum of the component scores (0-100). Each "notes" array holds 2-3 short,
-technical bullet fragments."""
+technical bullet fragments.
+Use DOUBLE QUOTES for every key and string. No single quotes, no trailing
+commas, no comments. Output valid JSON only."""
 
 
 def build_grading_system_blocks(

@@ -21,6 +21,28 @@ def test_extract_json_with_prose_around():
     assert _extract_json(text) == {"total": 65}
 
 
+def test_extract_json_single_quotes():
+    # Local models often emit Python-style single quotes.
+    text = "{'student_identifier': 'Sam', 'total': 70}"
+    assert _extract_json(text) == {"student_identifier": "Sam", "total": 70}
+
+
+def test_extract_json_trailing_comma():
+    text = '{"a": 1, "b": 2,}'
+    assert _extract_json(text) == {"a": 1, "b": 2}
+
+
+def test_extract_json_python_literals_and_fence():
+    text = "```json\n{'ok': True, 'n': None, 'items': [1, 2,]}\n```"
+    assert _extract_json(text) == {"ok": True, "n": None, "items": [1, 2]}
+
+
+def test_extract_json_gives_clear_error_when_unparseable():
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _extract_json("this is not json at all")
+
+
 def test_presets_have_required_fields():
     for key, p in PROVIDER_PRESETS.items():
         assert p.key == key

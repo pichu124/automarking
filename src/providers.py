@@ -16,8 +16,10 @@ interchangeably:
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -118,7 +120,12 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
 # --- JSON helpers ----------------------------------------------------------
 
 def _extract_json(text: str) -> dict:
-    """Pull a JSON object out of a model response, tolerating fences/prose."""
+    """Pull a JSON object out of a model response, tolerating local-model quirks.
+
+    Smaller open models often emit not-quite-JSON: markdown fences, single
+    quotes, trailing commas, or Python literals (True/False/None). We try strict
+    JSON first, then progressively repair before giving up.
+    """
     if text is None:
         raise ValueError("empty model response")
     cleaned = text.strip()
@@ -130,7 +137,29 @@ def _extract_json(text: str) -> dict:
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start != -1 and end != -1 and end > start:
         cleaned = cleaned[start : end + 1]
-    return json.loads(cleaned)
+    cleaned = cleaned.strip()
+
+    # 1. Strict JSON.
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    # 2. Strip trailing commas (",}" / ",]") and retry.
+    no_trailing = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+    try:
+        return json.loads(no_trailing)
+    except Exception:
+        pass
+    # 3. Python-literal fallback — handles single quotes and True/False/None.
+    try:
+        result = ast.literal_eval(no_trailing)
+        if isinstance(result, dict):
+            return result
+    except Exception:
+        pass
+    raise ValueError(
+        "Model did not return valid JSON. First 200 chars: " + cleaned[:200]
+    )
 
 
 # --- Anthropic (native, cached) -------------------------------------------
