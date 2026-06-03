@@ -6,7 +6,9 @@ display name, which downstream code feeds to the LLM.
 """
 from __future__ import annotations
 
+import html
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 from typing import List
@@ -34,7 +36,35 @@ def _read_docx(data: bytes) -> str:
             cells = [c.text.strip() for c in row.cells]
             if any(cells):
                 parts.append(" | ".join(cells))
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    if text.strip():
+        return text
+    # Fallback: python-docx's paragraph/table API misses text boxes, shapes,
+    # headers and footers. Pull text straight from the docx XML so rubrics laid
+    # out in a text box still come through.
+    return _docx_xml_text(data)
+
+
+def _docx_xml_text(data: bytes) -> str:
+    """Extract text from a docx's XML parts (catches text boxes/headers)."""
+    out: List[str] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        names = [
+            n for n in zf.namelist()
+            if n.startswith("word/") and n.endswith(".xml")
+            and any(k in n for k in ("document", "header", "footer"))
+        ]
+        names.sort(key=lambda n: (0 if n == "word/document.xml" else 1, n))
+        for name in names:
+            xml = zf.read(name).decode("utf-8", errors="replace")
+            # Preserve structure, then strip tags so text-box runs survive.
+            xml = xml.replace("</w:p>", "\n").replace("<w:tab/>", "\t")
+            xml = re.sub(r"<w:br[^>]*/>", "\n", xml)
+            stripped = re.sub(r"<[^>]+>", "", xml)
+            cleaned = html.unescape(stripped).strip()
+            if cleaned:
+                out.append(cleaned)
+    return "\n".join(out).strip()
 
 
 def _read_pdf(data: bytes) -> str:

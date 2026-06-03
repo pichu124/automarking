@@ -56,6 +56,19 @@ def _first_text(uploaded) -> str:
     return docs[0].text if docs else ""
 
 
+def _read_uploaded_once(uploaded, text_key: str, file_id_key: str) -> None:
+    """Read an uploaded file into session state exactly once per upload.
+
+    Reading only when the file id changes means a later manual paste into the
+    text area is not clobbered on every Streamlit rerun.
+    """
+    if uploaded is None:
+        return
+    if st.session_state.get(file_id_key) != uploaded.file_id:
+        st.session_state[text_key] = _first_text(uploaded)
+        st.session_state[file_id_key] = uploaded.file_id
+
+
 def _provider_chain() -> list[ProviderSpec]:
     """Ordered provider list: the sidebar primary, then any enabled fallbacks.
 
@@ -223,10 +236,10 @@ def calibration_data_ui() -> None:
         task_file = st.file_uploader(
             "Assignment requirements", type=["pdf", "docx", "txt", "md"], key="task_up"
         )
-        if task_file:
-            st.session_state["task_text"] = _first_text(task_file)
+        _read_uploaded_once(task_file, "task_text", "_task_file_id")
         st.session_state["task_text"] = st.text_area(
-            "Task text", value=st.session_state["task_text"], height=180
+            "Task text (you can also paste/edit here)",
+            value=st.session_state["task_text"], height=180,
         )
 
     with col_rubric:
@@ -234,10 +247,15 @@ def calibration_data_ui() -> None:
         rubric_file = st.file_uploader(
             "Grading criteria & weightings", type=["pdf", "docx", "txt", "md"], key="rubric_up"
         )
-        if rubric_file:
-            st.session_state["rubric_text"] = _first_text(rubric_file)
+        _read_uploaded_once(rubric_file, "rubric_text", "_rubric_file_id")
+        if rubric_file is not None and not st.session_state["rubric_text"].strip():
+            st.warning(
+                "Couldn't extract text from this file (it may be scanned or laid "
+                "out in a text box). Paste the rubric text below instead."
+            )
         st.session_state["rubric_text"] = st.text_area(
-            "Rubric text", value=st.session_state["rubric_text"], height=180
+            "Rubric text (you can also paste/edit here)",
+            value=st.session_state["rubric_text"], height=180,
         )
 
     st.subheader("🎯 Reference Samples (calibration anchors)")
