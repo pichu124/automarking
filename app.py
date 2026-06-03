@@ -478,6 +478,14 @@ def _estimate_ui(session: GradingSession) -> None:
             "**reference sample length** in the sidebar 📏 until it fits, while "
             "keeping the report length high."
         )
+        if provider_key == "ollama":
+            st.warning(
+                "⏱️ Local speed depends heavily on your CPU/GPU. On a 16GB "
+                "laptop with no GPU, an 8B model can take **several minutes per "
+                "report** (the first one also loads the model). To speed up: use "
+                "a smaller model (`qwen2.5:3b`), check `ollama ps` shows GPU use, "
+                "or switch to **Gemini free** for a much faster run."
+            )
         if est.supports_cache:
             st.caption(
                 f"Prompt caching applied: the shared context (~{est.static_tokens:,} "

@@ -107,7 +107,7 @@ PROVIDER_PRICING: dict[str, ModelPricing] = {
     "anthropic": ModelPricing(5.0, 25.0, supports_cache=True, seconds_per_report=22.0),
     "gemini": ModelPricing(0.10, 0.40, free_tier=True, seconds_per_report=5.0),
     "groq": ModelPricing(0.59, 0.79, free_tier=True, seconds_per_report=3.0),
-    "ollama": ModelPricing(0.0, 0.0, free_tier=True, seconds_per_report=15.0),
+    "ollama": ModelPricing(0.0, 0.0, free_tier=True, seconds_per_report=90.0),
     "openrouter": ModelPricing(0.60, 0.70, seconds_per_report=6.0),
     "deepseek": ModelPricing(0.28, 0.42, seconds_per_report=8.0),
     "mistral": ModelPricing(2.0, 6.0, seconds_per_report=6.0),
