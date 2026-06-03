@@ -31,9 +31,15 @@ class GradingLLM:
         api_key: str | None = None,
         model: str | None = None,
         effort: str | None = None,
+        max_retries: int = 4,
     ):
-        # The SDK reads ANTHROPIC_API_KEY from the environment when api_key is None.
-        self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        # The SDK reads ANTHROPIC_API_KEY from the environment when api_key is
+        # None. max_retries lets the SDK ride out transient 429/5xx with its own
+        # exponential backoff before we consider falling back to another provider.
+        kwargs = {"max_retries": max_retries}
+        if api_key:
+            kwargs["api_key"] = api_key
+        self.client = anthropic.Anthropic(**kwargs)
         self.model = model or config.DEFAULT_MODEL
         self.effort = effort or config.DEFAULT_EFFORT
 

@@ -129,8 +129,10 @@ def _extract_json(text: str) -> dict:
 class AnthropicProvider:
     """Native Claude path — keeps prompt caching + adaptive thinking."""
 
-    def __init__(self, model: str, api_key: str | None, effort: str):
-        self.llm = GradingLLM(api_key=api_key or None, model=model, effort=effort)
+    def __init__(self, model: str, api_key: str | None, effort: str, max_retries: int = 4):
+        self.llm = GradingLLM(
+            api_key=api_key or None, model=model, effort=effort, max_retries=max_retries
+        )
 
     def structure_rubric(self, rubric_text: str) -> StructuredRubric:
         return self.llm.structure_rubric(rubric_text)
@@ -148,6 +150,7 @@ class OpenAICompatibleProvider:
         api_key: str | None,
         base_url: str | None,
         temperature: float = 0.2,
+        max_retries: int = 4,
         max_tokens_grade: int = GRADING_MAX_TOKENS,
         max_tokens_rubric: int = RUBRIC_MAX_TOKENS,
     ):
@@ -163,7 +166,12 @@ class OpenAICompatibleProvider:
         self.max_tokens_grade = max_tokens_grade
         self.max_tokens_rubric = max_tokens_rubric
         # OpenAI client requires a non-empty key even for keyless local servers.
-        self.client = OpenAI(api_key=api_key or "not-needed", base_url=base_url or None)
+        # max_retries rides out transient 429/5xx with the SDK's own backoff.
+        self.client = OpenAI(
+            api_key=api_key or "not-needed",
+            base_url=base_url or None,
+            max_retries=max_retries,
+        )
 
     def _chat_json(self, system: str, user: str, max_tokens: int) -> dict:
         messages = [
@@ -220,6 +228,7 @@ def build_provider(
     base_url: str | None = None,
     effort: str = "high",
     temperature: float = 0.2,
+    max_retries: int = 4,
 ):
     """Construct the grader for a provider key (see PROVIDER_PRESETS)."""
     preset = PROVIDER_PRESETS.get(provider_key)
@@ -235,10 +244,31 @@ def build_provider(
     resolved_base_url = base_url if base_url is not None else preset.base_url
 
     if preset.kind == "anthropic":
-        return AnthropicProvider(model=model, api_key=api_key, effort=effort)
+        return AnthropicProvider(
+            model=model, api_key=api_key, effort=effort, max_retries=max_retries
+        )
     return OpenAICompatibleProvider(
         model=model,
         api_key=api_key,
         base_url=resolved_base_url,
         temperature=temperature,
+        max_retries=max_retries,
     )
+
+
+def preset_is_usable(provider_key: str) -> tuple[bool, str]:
+    """Whether a preset can run with no extra input (keyless or key in env).
+
+    Used by the UI to decide which fallbacks are available without prompting
+    for more keys. Returns (usable, reason_if_not).
+    """
+    preset = PROVIDER_PRESETS.get(provider_key)
+    if preset is None:
+        return False, "unknown provider"
+    if not preset.default_model:
+        return False, "needs a model name"
+    if preset.api_key_optional or preset.api_key_env is None:
+        return True, ""
+    if os.getenv(preset.api_key_env):
+        return True, ""
+    return False, f"set {preset.api_key_env}"

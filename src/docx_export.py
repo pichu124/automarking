@@ -25,6 +25,7 @@ def build_grade_document(
     reports: List[CalibratedReport],
     session_name: str,
     calibration: Optional[CalibrationReport] = None,
+    graded_by: str = "",
 ) -> bytes:
     """Build the .docx and return its bytes (ready for download)."""
     doc = Document()
@@ -34,7 +35,7 @@ def build_grade_document(
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     if calibration is not None:
-        _add_cohort_summary(doc, calibration)
+        _add_cohort_summary(doc, calibration, graded_by)
 
     for i, report in enumerate(reports):
         if i > 0 or calibration is not None:
@@ -52,7 +53,7 @@ def _build_styles(doc: Document) -> None:
     style.font.size = Pt(10.5)
 
 
-def _add_cohort_summary(doc: Document, calib: CalibrationReport) -> None:
+def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str = "") -> None:
     doc.add_heading("Cohort Summary", level=1)
     table = doc.add_table(rows=0, cols=2)
     table.style = "Light Grid Accent 1"
@@ -62,6 +63,8 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport) -> None:
         cells[0].text = label
         cells[1].text = value
 
+    if graded_by:
+        row("Graded by", graded_by)
     row("Reports graded", str(calib.n))
     row("Calibrated mean", f"{calib.final_mean:.2f}%  (raw {calib.raw_mean:.2f}%)")
     row("High Distinction (>=80%)", f"{calib.hd_count}  (cap {calib.hd_cap})")

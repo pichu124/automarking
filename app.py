@@ -18,8 +18,13 @@ from dotenv import load_dotenv
 from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT
 from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
-from src.grading_engine import GradingSession, grade_batch
-from src.providers import PROVIDER_PRESETS, build_provider
+from src.grading_engine import (
+    GradingSession,
+    ProviderSpec,
+    grade_batch_with_fallback,
+    structure_rubric_with_fallback,
+)
+from src.providers import PROVIDER_PRESETS, preset_is_usable
 
 load_dotenv()
 
@@ -50,16 +55,37 @@ def _first_text(uploaded) -> str:
     return docs[0].text if docs else ""
 
 
-def _grader():
-    """Build the grading back-end from the sidebar provider selection."""
-    return build_provider(
-        st.session_state.get("provider_key", "anthropic"),
+def _provider_chain() -> list[ProviderSpec]:
+    """Ordered provider list: the sidebar primary, then any enabled fallbacks.
+
+    The whole cohort is graded by ONE provider; fallbacks only kick in if the
+    one above them is unavailable, and switching re-grades from scratch — so
+    scores stay consistent.
+    """
+    primary = ProviderSpec(
+        provider_key=st.session_state.get("provider_key", "anthropic"),
         model=st.session_state.get("model") or None,
         api_key=st.session_state.get("api_key") or None,
-        base_url=st.session_state.get("base_url") if st.session_state.get("base_url") else None,
+        base_url=st.session_state.get("base_url") or None,
         effort=st.session_state.get("effort", DEFAULT_EFFORT),
         temperature=st.session_state.get("temperature", 0.2),
+        label=PROVIDER_PRESETS[st.session_state.get("provider_key", "anthropic")].label,
     )
+    chain = [primary]
+    for key in st.session_state.get("fallback_keys", []):
+        if key == primary.provider_key:
+            continue
+        preset = PROVIDER_PRESETS[key]
+        # Fallbacks use preset defaults + env-var keys (resolved in build_provider).
+        chain.append(
+            ProviderSpec(
+                provider_key=key,
+                effort=DEFAULT_EFFORT,
+                temperature=st.session_state.get("temperature", 0.2),
+                label=preset.label,
+            )
+        )
+    return chain
 
 
 # --- UI sections -----------------------------------------------------------
@@ -130,6 +156,38 @@ def sidebar() -> None:
                 help="Lower = more consistent grading.",
             )
 
+        # --- Automatic fallback ------------------------------------------
+        st.divider()
+        st.subheader("🛟 Automatic fallback")
+        st.caption(
+            "If the provider above becomes unavailable (e.g. rate-limited), the "
+            "app re-grades the **whole cohort** with the next available "
+            "provider — so every report stays on one consistent scale."
+        )
+        candidates = [k for k in PROVIDER_PRESETS if k != provider_key and k != "custom"]
+        usable = [k for k in candidates if preset_is_usable(k)[0]]
+        unusable = [k for k in candidates if not preset_is_usable(k)[0]]
+        st.session_state["fallback_keys"] = st.multiselect(
+            "Fallback providers (in order)",
+            options=usable,
+            default=[k for k in st.session_state.get("fallback_keys", []) if k in usable],
+            format_func=lambda k: PROVIDER_PRESETS[k].label
+            + (" · 🆓" if PROVIDER_PRESETS[k].free else ""),
+            help="Only providers with a key already in your environment (or "
+                 "keyless, like Ollama) are listed. Fallbacks use their default "
+                 "model. ⚠️ A different model means a different grading scale — "
+                 "the cohort is re-graded entirely, never mixed.",
+        )
+        if unusable:
+            st.caption(
+                "Not available as fallback (no key set): "
+                + ", ".join(PROVIDER_PRESETS[k].label for k in unusable)
+            )
+        chain_labels = [preset.label] + [
+            PROVIDER_PRESETS[k].label for k in st.session_state["fallback_keys"]
+        ]
+        st.caption("Grading order: " + " → ".join(chain_labels))
+
         st.divider()
         st.subheader("Calibration targets")
         c = DEFAULT_CALIBRATION
@@ -199,8 +257,11 @@ def calibration_data_ui() -> None:
         else:
             with st.spinner("Parsing rubric…"):
                 try:
-                    rubric = _grader().structure_rubric(st.session_state["rubric_text"])
+                    rubric, used = structure_rubric_with_fallback(
+                        _provider_chain(), st.session_state["rubric_text"]
+                    )
                     st.session_state["components"] = rubric.components
+                    st.caption(f"Structured with: {used}")
                 except Exception as exc:
                     st.error(f"Rubric structuring failed: {exc}")
 
@@ -257,7 +318,9 @@ def grade_ui() -> None:
             progress.progress(min(1.0, done / max(1, total)), text=label)
 
         try:
-            result = grade_batch(_grader(), session, st.session_state["documents"], progress_callback=cb)
+            result = grade_batch_with_fallback(
+                _provider_chain(), session, st.session_state["documents"], progress_callback=cb
+            )
             st.session_state["batch_result"] = result
         except Exception as exc:
             st.error(f"Grading failed: {exc}")
@@ -271,6 +334,20 @@ def _render_results() -> None:
     result = st.session_state.get("batch_result")
     if not result:
         return
+
+    if result.provider_label:
+        if result.fell_back_from:
+            st.warning(
+                f"✅ Whole cohort graded by **{result.provider_label}** "
+                f"(fell back from: {', '.join(result.fell_back_from)}). "
+                "All reports share one consistent scale."
+            )
+        else:
+            st.caption(f"Graded by: {result.provider_label}")
+    if result.notes:
+        with st.expander("Fallback / audit trail", expanded=bool(result.fell_back_from)):
+            for note in result.notes:
+                st.write("•", note)
 
     if result.errors:
         with st.expander(f"⚠️ {len(result.errors)} report(s) failed", expanded=False):
@@ -305,6 +382,7 @@ def _render_results() -> None:
             result.reports,
             st.session_state["session_name"] or "Untitled session",
             calib,
+            graded_by=result.provider_label,
         )
         st.download_button(
             "📄 Download Word grade report (.docx)",

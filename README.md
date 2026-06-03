@@ -46,6 +46,28 @@ grading quality and consistency matter most. Quality of feedback and calibration
 fidelity track the underlying model — small local models are cheaper but blunter.
 Add a provider in `src/providers.py` (`PROVIDER_PRESETS`).
 
+### Automatic fallback — *without breaking consistency*
+
+You can enable an ordered list of **fallback providers** (sidebar → "Automatic
+fallback"). The calibration only makes sense if the whole cohort is graded by
+**one** model — different models score on different baselines, so a mixed cohort
+can't be calibrated on a single scale. The fallback therefore works like this:
+
+- **Transient rate-limits / 5xx** are absorbed *inside* a provider by the SDK's
+  own exponential backoff (`max_retries=4`). Most 429s never cause a switch.
+- **Only a persistent provider-health failure** (rate-limit after retries, auth
+  error, server/connection error) triggers a switch — and switching **re-grades
+  the entire cohort from scratch** with the next provider, discarding the failed
+  provider's partial work.
+- **Per-report content errors** (an unparseable document, invalid JSON for one
+  report) do *not* switch provider; they're recorded and skipped.
+
+The guarantee: the final cohort is always graded end-to-end by a single
+provider. The UI and the `.docx` ("Graded by …") record which one, and the
+result carries an audit trail of any fallback. Logic lives in
+`grade_batch_with_fallback` (`src/grading_engine.py`); the consistency invariant
+is covered by `tests/test_fallback.py`.
+
 ### Workflow
 
 ```
