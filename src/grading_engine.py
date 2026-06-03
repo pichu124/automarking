@@ -95,11 +95,22 @@ class BatchResult:
 
 # --- Provider-health classification ---------------------------------------
 
-_HEALTH_STATUS = {401, 403, 408, 409, 429, 500, 502, 503, 504, 529}
+# 413 (request too large) is included so an oversized request falls back to a
+# bigger-context provider rather than failing report-by-report.
+_HEALTH_STATUS = {401, 403, 408, 409, 413, 429, 500, 502, 503, 504, 529}
 _HEALTH_NAME_TOKENS = (
     "ratelimit", "overloaded", "timeout", "connection", "internalservererror",
     "serviceunavailable", "apistatuserror", "apiconnectionerror",
     "authentication", "permissiondenied",
+)
+# Message fragments that mean "this provider can't serve the batch" — a bad
+# API key, exhausted quota, or a too-large request. Catching these lets the
+# engine fail fast and switch instead of repeating the same error per report.
+_HEALTH_MESSAGE_TOKENS = (
+    "api key", "api_key_invalid", "invalid api key", "invalid_api_key",
+    "unauthorized", "permission denied", "quota", "insufficient_quota",
+    "rate limit", "rate_limit", "request too large", "request_too_large",
+    "tokens per minute", "reduce your message size", "billing",
 )
 
 
@@ -115,16 +126,19 @@ class ProviderUnavailable(Exception):
 def _is_provider_unhealthy(exc: Exception) -> bool:
     """True for errors that mean *the provider* is the problem (not the report).
 
-    Rate-limits, auth failures, server and connection errors qualify; a 400 /
-    validation / parse error does not (that's a per-report content issue).
+    Rate-limits, auth/key failures, quota, oversized-request, server and
+    connection errors qualify; a plain validation / JSON-parse error does not
+    (that's a per-report content issue).
     """
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(exc, "status", None)
     if isinstance(status, int) and status in _HEALTH_STATUS:
         return True
-    name = type(exc).__name__.lower()
-    return any(tok in name for tok in _HEALTH_NAME_TOKENS)
+    blob = f"{type(exc).__name__} {exc}".lower()
+    if any(tok in blob for tok in _HEALTH_NAME_TOKENS):
+        return True
+    return any(tok in blob for tok in _HEALTH_MESSAGE_TOKENS)
 
 
 # --- Pass 1 / Pass 2 helpers ----------------------------------------------

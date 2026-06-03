@@ -22,6 +22,7 @@ from .prompts import (
     RUBRIC_STRUCTURING_PROMPT,
     build_grading_system_blocks,
     build_grading_user_message,
+    cap_text,
 )
 
 
@@ -58,7 +59,7 @@ class GradingLLM:
                     "role": "user",
                     "content": (
                         "Structure this rubric into weighted components:\n\n"
-                        f"{rubric_text.strip()}"
+                        f"{cap_text(rubric_text, config.MAX_RUBRIC_CHARS)}"
                     ),
                 }
             ],

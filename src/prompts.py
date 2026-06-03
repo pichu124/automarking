@@ -11,7 +11,21 @@ from __future__ import annotations
 
 from typing import List
 
+from . import config
 from .models import RubricComponent
+
+
+def cap_text(text: str, max_chars: int) -> str:
+    """Trim text to a character budget so requests stay within token limits.
+
+    Big reference papers and reports would otherwise blow past free-tier
+    tokens-per-minute limits and inflate cost. A truncated excerpt still anchors
+    the grading standard well.
+    """
+    text = (text or "").strip()
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n…[truncated to fit context limits]"
 
 
 # --- Rubric structuring ----------------------------------------------------
@@ -103,16 +117,16 @@ def _build_session_context(
     }
     sample_text_parts = []
     for key, label in sample_labels.items():
-        body = reference_samples.get(key, "").strip()
+        body = cap_text(reference_samples.get(key, ""), config.MAX_SAMPLE_CHARS)
         if body:
             sample_text_parts.append(f"=== {label} ===\n{body}")
     samples_block = "\n\n".join(sample_text_parts) if sample_text_parts else "(none provided)"
 
     return (
         "# THE TASK (assignment requirements)\n"
-        f"{task_text.strip()}\n\n"
+        f"{cap_text(task_text, config.MAX_TASK_CHARS)}\n\n"
         "# THE RUBRIC (grade strictly against these components)\n"
-        f"{rubric_text.strip()}\n\n"
+        f"{cap_text(rubric_text, config.MAX_RUBRIC_CHARS)}\n\n"
         "# RUBRIC COMPONENTS (use these names and max_scores exactly)\n"
         f"{_format_components(components)}\n\n"
         "# REFERENCE SAMPLES (your calibration anchors)\n"
@@ -188,6 +202,6 @@ def build_grading_user_message(source_name: str, report_text: str) -> str:
     return (
         f"Grade the following student report. Source filename: {source_name}\n\n"
         "=== STUDENT REPORT START ===\n"
-        f"{report_text.strip()}\n"
+        f"{cap_text(report_text, config.MAX_REPORT_CHARS)}\n"
         "=== STUDENT REPORT END ==="
     )

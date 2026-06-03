@@ -21,6 +21,18 @@ GRADING_MAX_TOKENS = 8000
 RUBRIC_MAX_TOKENS = 4000
 
 
+# --- Context size caps (characters) ---------------------------------------
+# Each grading request bundles the task, rubric, four reference samples and the
+# student report. Reference samples are often FULL graded papers, which can push
+# a single request past free-tier token-per-minute limits (e.g. Groq's 12k TPM)
+# and inflate cost. These caps trim each piece; ~4 chars/token. Edit freely —
+# raise them on Claude/Gemini (huge context), lower them for tight free tiers.
+MAX_TASK_CHARS = 6000          # ≈ 1.5k tokens
+MAX_RUBRIC_CHARS = 8000        # ≈ 2k tokens
+MAX_SAMPLE_CHARS = 6000        # per reference sample, ≈ 1.5k tokens
+MAX_REPORT_CHARS = 16000       # per student report, ≈ 4k tokens
+
+
 # --- Calibration targets (the "curve") ------------------------------------
 
 @dataclass(frozen=True)

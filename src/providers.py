@@ -21,6 +21,7 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
+from . import config
 from .config import GRADING_MAX_TOKENS, RUBRIC_MAX_TOKENS
 from .llm_client import GradingLLM, _normalise_weights
 from .models import GradingResult, RubricComponent, StructuredRubric
@@ -30,6 +31,7 @@ from .prompts import (
     RUBRIC_STRUCTURING_PROMPT,
     build_grading_system_text,
     build_grading_user_message,
+    cap_text,
 )
 
 
@@ -65,7 +67,11 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         key="groq", label="Groq (free tier)", kind="openai",
         default_model="llama-3.3-70b-versatile", api_key_env="GROQ_API_KEY",
         base_url="https://api.groq.com/openai/v1",
-        free=True, note="Fast, free tier; open models. console.groq.com.",
+        free=True,
+        note="Fast, open models. console.groq.com. NOTE: free tier is ~12k "
+             "tokens/min — too small for full rubrics + reference samples; "
+             "prefer Gemini/Claude/Ollama for large context, or lower the caps "
+             "in src/config.py.",
     ),
     "ollama": ProviderPreset(
         key="ollama", label="Ollama (local, free)", kind="openai",
@@ -195,7 +201,8 @@ class OpenAICompatibleProvider:
 
     def structure_rubric(self, rubric_text: str) -> StructuredRubric:
         system = f"{RUBRIC_STRUCTURING_PROMPT}\n\n# OUTPUT FORMAT\n{RUBRIC_JSON_INSTRUCTION}"
-        user = f"Structure this rubric into weighted components:\n\n{rubric_text.strip()}"
+        capped = cap_text(rubric_text, config.MAX_RUBRIC_CHARS)
+        user = f"Structure this rubric into weighted components:\n\n{capped}"
         data = self._chat_json(system, user, self.max_tokens_rubric)
         rubric = StructuredRubric.model_validate(data)
         return _normalise_weights(rubric)

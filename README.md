@@ -46,6 +46,24 @@ grading quality and consistency matter most. Quality of feedback and calibration
 fidelity track the underlying model — small local models are cheaper but blunter.
 Add a provider in `src/providers.py` (`PROVIDER_PRESETS`).
 
+### Context size & free-tier limits
+
+Each grading request bundles the task, rubric, four reference samples and one
+student report. Reference samples are often full graded papers, so requests can
+balloon to tens of thousands of tokens — which blows past tight free-tier
+token-per-minute limits and inflates cost. The app therefore **caps** each piece
+(`MAX_TASK_CHARS`, `MAX_RUBRIC_CHARS`, `MAX_SAMPLE_CHARS`, `MAX_REPORT_CHARS` in
+`src/config.py`); a truncated excerpt still anchors the standard well. Defaults
+keep a request near ~14k tokens.
+
+Provider notes:
+- **Groq free tier ≈ 12k tokens/min** — too small for a full rubric + four
+  samples. Use it only with small contexts; otherwise prefer the options below.
+- **Gemini free tier / Claude** have very large context windows — best for full
+  rubrics and samples. **Ollama** (local) has no token billing at all.
+- The "📊 Estimate cost & time" panel shows the per-batch token count so you can
+  see whether you'll hit a limit before running.
+
 ### Automatic fallback — *without breaking consistency*
 
 You can enable an ordered list of **fallback providers** (sidebar → "Automatic
