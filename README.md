@@ -46,6 +46,35 @@ grading quality and consistency matter most. Quality of feedback and calibration
 fidelity track the underlying model — small local models are cheaper but blunter.
 Add a provider in `src/providers.py` (`PROVIDER_PRESETS`).
 
+### Running fully free & offline with Ollama
+
+[Ollama](https://ollama.com) runs an open model on your own machine — no API key,
+no cost, nothing leaves your computer. Setup:
+
+1. **Pull a model:** `ollama pull llama3.1` (or a stronger one — see below).
+2. **Raise the context window.** Ollama's default is ~4k tokens, far too small
+   for a rubric + four samples + a report, so long inputs get silently cut off.
+   Set `OLLAMA_CONTEXT_LENGTH` and restart Ollama:
+   - **Windows (PowerShell):**
+     ```powershell
+     [System.Environment]::SetEnvironmentVariable("OLLAMA_CONTEXT_LENGTH","32768","User")
+     ```
+     then quit Ollama from the system tray and reopen it.
+   - **macOS/Linux:** `export OLLAMA_CONTEXT_LENGTH=32768` then `ollama serve`.
+   - *Alternative (per-model):* a Modelfile —
+     `FROM llama3.1` + `PARAMETER num_ctx 32768`, then
+     `ollama create grading -f Modelfile`, and use model `grading` in the app.
+3. **In the app sidebar:** pick **Ollama (local, free)**, set the model name to
+   what you pulled, and set **📏 Document length** so a whole request fits your
+   context (use the token count in the 📊 Estimate panel as a guide — request ≈
+   static context + report + output).
+
+**Model choice ↔ machine.** Bigger models grade better but need more RAM/VRAM:
+`llama3.1:8b` / `qwen2.5:7b` run on ~16GB; `qwen2.5:14b` is noticeably sharper if
+you have headroom. Local models give rougher feedback than Claude/Gemini and may
+occasionally emit malformed JSON (those reports are recorded as errors and the
+batch continues). For best local quality, prefer a 14B+ instruct model.
+
 ### Context size & free-tier limits
 
 Each grading request bundles the task, rubric, four reference samples and one

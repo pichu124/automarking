@@ -78,7 +78,10 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         default_model="llama3.1", api_key_env=None,
         base_url="http://localhost:11434/v1",
         free=True, api_key_optional=True,
-        note="Runs fully offline on your machine. Install from ollama.com.",
+        note="Runs fully offline. Install from ollama.com, then `ollama pull "
+             "llama3.1`. IMPORTANT: raise the context window "
+             "(OLLAMA_CONTEXT_LENGTH, default ~4k) or long inputs get cut off — "
+             "see README.",
     ),
     "openrouter": ProviderPreset(
         key="openrouter", label="OpenRouter", kind="openai",

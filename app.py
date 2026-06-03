@@ -129,6 +129,15 @@ def sidebar() -> None:
         preset = PROVIDER_PRESETS[provider_key]
         if preset.note:
             st.caption(preset.note)
+        if provider_key == "ollama":
+            st.info(
+                "Ollama checklist:\n"
+                "1. `ollama pull llama3.1` (or another model)\n"
+                "2. Raise context: set `OLLAMA_CONTEXT_LENGTH` (e.g. 32768) and "
+                "restart Ollama — otherwise long inputs are silently cut.\n"
+                "3. Keep **📏 Document length** so a request fits your context "
+                "(check the token count in 📊 Estimate)."
+            )
 
         # Model — prefilled with the preset default, editable.
         if st.session_state.get("_model_for") != provider_key:
