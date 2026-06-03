@@ -18,8 +18,9 @@ from dotenv import load_dotenv
 from src import config
 from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 
-# Baseline cap captured before any runtime override (used as the UI default).
-_BASE_DOC_CAP = config.MAX_REPORT_CHARS
+# Baseline caps captured before any runtime override (used as UI defaults).
+_BASE_REPORT_CAP = config.MAX_REPORT_CHARS
+_BASE_SAMPLE_CAP = config.MAX_SAMPLE_CHARS
 from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
 from src.estimator import compare_providers, estimate_batch, static_context_text
@@ -218,23 +219,31 @@ def sidebar() -> None:
         # --- How much of each document to send ---------------------------
         st.divider()
         st.subheader("📏 Document length")
-        cap = st.number_input(
-            "Max characters per document (0 = read everything)",
+        report_cap = st.number_input(
+            "Student report — max characters (0 = full)",
             min_value=0, max_value=400_000,
-            value=int(st.session_state.get("doc_cap", _BASE_DOC_CAP)), step=2000,
-            help="How much of each student report / reference sample to send to "
-                 "the model. 0 = no limit (best with large-context models like "
-                 "Claude or Gemini). Lower it only to fit tight free tiers (Groq).",
+            value=int(st.session_state.get("report_cap", _BASE_REPORT_CAP)), step=2000,
+            help="The work being graded — keep this HIGH so the model reads the "
+                 "whole report. A 2,500-word report is ~16,000 chars.",
         )
-        st.session_state["doc_cap"] = cap
-        # Apply at runtime — prompts read these from config on each call.
-        config.MAX_REPORT_CHARS = cap
-        config.MAX_SAMPLE_CHARS = cap
-        if cap == 0:
-            st.caption("Reading full documents — nothing is truncated.")
-        else:
-            st.caption(f"≈ {cap // 4:,} tokens max per document. A 2,500-word "
-                       "assignment (~16k chars) fits with room to spare.")
+        sample_cap = st.number_input(
+            "Each reference sample — max characters (0 = full)",
+            min_value=0, max_value=400_000,
+            value=int(st.session_state.get("sample_cap", _BASE_SAMPLE_CAP)), step=2000,
+            help="Samples are calibration anchors — an excerpt is enough. LOWER "
+                 "this first to shrink each request (biggest lever for small "
+                 "contexts like Ollama). 4 samples are sent every request.",
+        )
+        st.session_state["report_cap"] = report_cap
+        st.session_state["sample_cap"] = sample_cap
+        # Applied at runtime — prompts read these from config on each call.
+        config.MAX_REPORT_CHARS = report_cap
+        config.MAX_SAMPLE_CHARS = sample_cap
+        st.caption(
+            f"≈ {(report_cap // 4) if report_cap else 0:,} tok/report · "
+            f"{(sample_cap // 4) if sample_cap else 0:,} tok/sample × 4. "
+            "0 = read in full."
+        )
 
         st.divider()
         st.subheader("Calibration targets")
@@ -404,8 +413,9 @@ def _estimate_ui(session: GradingSession) -> None:
         st.caption(
             f"One request ≈ {est.tokens_per_request_avg:,} tokens "
             f"(largest ≈ {est.tokens_per_request_max:,}). For **Ollama**, set "
-            "`OLLAMA_CONTEXT_LENGTH` above this number, or lower 📏 Document "
-            "length until it fits."
+            "`OLLAMA_CONTEXT_LENGTH` above the larger number — or lower "
+            "**reference sample length** in the sidebar 📏 until it fits, while "
+            "keeping the report length high."
         )
         if est.supports_cache:
             st.caption(
