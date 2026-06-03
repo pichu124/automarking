@@ -89,20 +89,12 @@ def _format_components(components: List[RubricComponent]) -> str:
     return "\n".join(lines)
 
 
-def build_grading_system_blocks(
+def _build_session_context(
     task_text: str,
     rubric_text: str,
     components: List[RubricComponent],
     reference_samples: dict[str, str],
-) -> list[dict]:
-    """Build the cacheable system blocks for grading.
-
-    Block 1: the static persona (caches across all sessions).
-    Block 2: this session's task + rubric + reference samples, with a
-             `cache_control` breakpoint so it caches across every student in
-             the batch. Volatile per-student content goes in the user message,
-             never here.
-    """
+) -> str:
     sample_labels = {
         "HD": "HIGH DISTINCTION reference sample",
         "DI": "DISTINCTION reference sample",
@@ -116,7 +108,7 @@ def build_grading_system_blocks(
             sample_text_parts.append(f"=== {label} ===\n{body}")
     samples_block = "\n\n".join(sample_text_parts) if sample_text_parts else "(none provided)"
 
-    session_context = (
+    return (
         "# THE TASK (assignment requirements)\n"
         f"{task_text.strip()}\n\n"
         "# THE RUBRIC (grade strictly against these components)\n"
@@ -127,6 +119,44 @@ def build_grading_system_blocks(
         f"{samples_block}"
     )
 
+
+# --- JSON-output instructions for non-Anthropic providers ------------------
+# Native Claude grading uses messages.parse (the Pydantic schema is the
+# contract). Other providers are told the exact JSON shape and we parse it.
+
+RUBRIC_JSON_INSTRUCTION = """\
+Return ONLY a JSON object, no prose and no markdown fences, of the form:
+{"components": [{"name": "string", "weight": number, "description": "string"}]}
+The weights MUST sum to exactly 100. Preserve the rubric's component order."""
+
+GRADING_JSON_INSTRUCTION = """\
+Return ONLY a JSON object, no prose and no markdown fences, of the form:
+{"student_identifier": "string",
+ "components": [{"name": "string", "score": number, "max_score": number,
+                 "notes": ["string", "string"]}],
+ "total": number}
+The components MUST match the rubric components exactly, in order. "total" is
+the sum of the component scores (0-100). Each "notes" array holds 2-3 short,
+technical bullet fragments."""
+
+
+def build_grading_system_blocks(
+    task_text: str,
+    rubric_text: str,
+    components: List[RubricComponent],
+    reference_samples: dict[str, str],
+) -> list[dict]:
+    """Build the cacheable system blocks for native Claude grading.
+
+    Block 1: the static persona (caches across all sessions).
+    Block 2: this session's task + rubric + reference samples, with a
+             `cache_control` breakpoint so it caches across every student in
+             the batch. Volatile per-student content goes in the user message,
+             never here.
+    """
+    session_context = _build_session_context(
+        task_text, rubric_text, components, reference_samples
+    )
     return [
         {"type": "text", "text": GRADING_SYSTEM_PROMPT},
         {
@@ -135,6 +165,22 @@ def build_grading_system_blocks(
             "cache_control": {"type": "ephemeral"},
         },
     ]
+
+
+def build_grading_system_text(
+    task_text: str,
+    rubric_text: str,
+    components: List[RubricComponent],
+    reference_samples: dict[str, str],
+) -> str:
+    """Single system string for OpenAI-compatible providers (no caching)."""
+    session_context = _build_session_context(
+        task_text, rubric_text, components, reference_samples
+    )
+    return (
+        f"{GRADING_SYSTEM_PROMPT}\n\n{session_context}\n\n"
+        f"# OUTPUT FORMAT\n{GRADING_JSON_INSTRUCTION}"
+    )
 
 
 def build_grading_user_message(source_name: str, report_text: str) -> str:

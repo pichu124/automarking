@@ -15,11 +15,11 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, DEFAULT_MODEL
+from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT
 from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
 from src.grading_engine import GradingSession, grade_batch
-from src.llm_client import GradingLLM
+from src.providers import PROVIDER_PRESETS, build_provider
 
 load_dotenv()
 
@@ -50,10 +50,15 @@ def _first_text(uploaded) -> str:
     return docs[0].text if docs else ""
 
 
-def _llm() -> GradingLLM:
-    return GradingLLM(
-        model=st.session_state.get("model", DEFAULT_MODEL),
+def _grader():
+    """Build the grading back-end from the sidebar provider selection."""
+    return build_provider(
+        st.session_state.get("provider_key", "anthropic"),
+        model=st.session_state.get("model") or None,
+        api_key=st.session_state.get("api_key") or None,
+        base_url=st.session_state.get("base_url") if st.session_state.get("base_url") else None,
         effort=st.session_state.get("effort", DEFAULT_EFFORT),
+        temperature=st.session_state.get("temperature", 0.2),
     )
 
 
@@ -61,13 +66,69 @@ def _llm() -> GradingLLM:
 
 def sidebar() -> None:
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            st.warning("Set ANTHROPIC_API_KEY in your environment or .env file.")
-        st.session_state["model"] = st.text_input("Model", value=DEFAULT_MODEL)
-        st.session_state["effort"] = st.select_slider(
-            "Effort", options=["low", "medium", "high", "max"], value=DEFAULT_EFFORT
+        st.header("⚙️ Provider")
+
+        keys = list(PROVIDER_PRESETS.keys())
+
+        def _fmt(k: str) -> str:
+            p = PROVIDER_PRESETS[k]
+            tag = " · 🆓" if p.free else ""
+            return f"{p.label}{tag}"
+
+        provider_key = st.selectbox(
+            "Grading engine", keys, format_func=_fmt,
+            index=keys.index(st.session_state.get("provider_key", "anthropic")),
+            help="Anthropic is paid. Gemini & Groq have free tiers; Ollama is "
+                 "fully free and runs locally.",
         )
+        st.session_state["provider_key"] = provider_key
+        preset = PROVIDER_PRESETS[provider_key]
+        if preset.note:
+            st.caption(preset.note)
+
+        # Model — prefilled with the preset default, editable.
+        if st.session_state.get("_model_for") != provider_key:
+            st.session_state["model"] = preset.default_model
+            st.session_state["_model_for"] = provider_key
+        st.session_state["model"] = st.text_input("Model", value=st.session_state.get("model", ""))
+
+        # API key — defaults to the relevant env var; hidden input to override.
+        env_key = os.getenv(preset.api_key_env) if preset.api_key_env else None
+        if preset.api_key_optional:
+            st.caption("No API key required for this provider.")
+            st.session_state["api_key"] = ""
+        elif env_key:
+            st.success(f"Using {preset.api_key_env} from the environment.")
+            st.session_state["api_key"] = ""
+        else:
+            label = f"{preset.api_key_env or 'API key'}"
+            st.session_state["api_key"] = st.text_input(
+                label, type="password", value=st.session_state.get("api_key", ""),
+                help="Or set it in your environment / .env file.",
+            )
+            if preset.api_key_env and not st.session_state["api_key"]:
+                st.warning(f"Set {preset.api_key_env} or paste a key above.")
+
+        # Base URL — only for custom endpoints.
+        if provider_key == "custom":
+            st.session_state["base_url"] = st.text_input(
+                "Base URL", value=st.session_state.get("base_url", ""),
+                placeholder="https://your-endpoint/v1",
+            )
+        else:
+            st.session_state["base_url"] = ""
+
+        # Generation controls differ by kind.
+        if preset.kind == "anthropic":
+            st.session_state["effort"] = st.select_slider(
+                "Effort", options=["low", "medium", "high", "max"],
+                value=st.session_state.get("effort", DEFAULT_EFFORT),
+            )
+        else:
+            st.session_state["temperature"] = st.slider(
+                "Temperature", 0.0, 1.0, st.session_state.get("temperature", 0.2), 0.05,
+                help="Lower = more consistent grading.",
+            )
 
         st.divider()
         st.subheader("Calibration targets")
@@ -138,7 +199,7 @@ def calibration_data_ui() -> None:
         else:
             with st.spinner("Parsing rubric…"):
                 try:
-                    rubric = _llm().structure_rubric(st.session_state["rubric_text"])
+                    rubric = _grader().structure_rubric(st.session_state["rubric_text"])
                     st.session_state["components"] = rubric.components
                 except Exception as exc:
                     st.error(f"Rubric structuring failed: {exc}")
@@ -196,7 +257,7 @@ def grade_ui() -> None:
             progress.progress(min(1.0, done / max(1, total)), text=label)
 
         try:
-            result = grade_batch(_llm(), session, st.session_state["documents"], progress_callback=cb)
+            result = grade_batch(_grader(), session, st.session_state["documents"], progress_callback=cb)
             st.session_state["batch_result"] = result
         except Exception as exc:
             st.error(f"Grading failed: {exc}")

@@ -11,14 +11,30 @@ The engine is UI-agnostic; ``app.py`` drives it and renders progress. A
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Protocol
 
 from .calibration import CalibrationConfig, CalibrationReport, calibrate_scores, rescale_components
 from .document_parser import ParsedDocument
-from .llm_client import GradingLLM
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
 
 ProgressCallback = Callable[[int, int, str], None]
+
+
+class Grader(Protocol):
+    """Any grading back-end (see ``src/providers.py``)."""
+
+    def structure_rubric(self, rubric_text: str) -> "StructuredRubric": ...  # noqa: F821
+
+    def grade_report(
+        self,
+        *,
+        task_text: str,
+        rubric_text: str,
+        components: List[RubricComponent],
+        reference_samples: dict,
+        source_name: str,
+        report_text: str,
+    ) -> GradingResult: ...
 
 
 @dataclass
@@ -40,7 +56,7 @@ class BatchResult:
 
 
 def grade_batch(
-    llm: GradingLLM,
+    grader: Grader,
     session: GradingSession,
     documents: List[ParsedDocument],
     calibration_config: CalibrationConfig | None = None,
@@ -56,7 +72,7 @@ def grade_batch(
         if progress_callback:
             progress_callback(idx, total, f"Grading {doc.name}")
         try:
-            graded = llm.grade_report(
+            graded = grader.grade_report(
                 task_text=session.task_text,
                 rubric_text=session.rubric_text,
                 components=session.components,

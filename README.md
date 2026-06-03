@@ -16,11 +16,35 @@ exports a structured **Microsoft Word** grade report.
 | Layer | Choice | Why |
 |---|---|---|
 | UI | **Streamlit** | Fast to build, native file-upload + download widgets |
-| LLM | **Anthropic Claude** (`claude-opus-4-8`) via the official SDK | Strongest grading judgement; structured outputs + prompt caching |
-| Structured output | `messages.parse` + Pydantic (`output_config.format`) | Validated JSON, never brittle text parsing |
+| LLM | **Pluggable** — Claude, Gemini, Groq, Ollama, OpenAI, … | Pick by cost/quality; see Providers below |
+| Structured output | Claude: `messages.parse` + Pydantic. Others: JSON mode + robust parse | Validated objects, never brittle text parsing |
 | Doc parsing | `python-docx`, `pypdf`, `zipfile` | DOCX / PDF / TXT / ZIP ingestion |
 | Export | `python-docx` | The rubric-shaped `.docx` deliverable |
 | Calibration | Pure-Python, unit-tested | Deterministic, auditable, no LLM in the loop |
+
+### Providers (free & paid)
+
+Anthropic's API is paid, so the app ships a **provider selector** (sidebar). Most
+providers speak the OpenAI Chat Completions protocol, so one adapter
+(`OpenAICompatibleProvider`) covers many back-ends; the native Anthropic path
+keeps Claude's prompt caching. Switch any time — the rest of the pipeline is
+unchanged.
+
+| Provider | Cost | Notes |
+|---|---|---|
+| **Anthropic Claude** | Paid | Best grading quality; prompt caching |
+| **Google Gemini** | 🆓 **free tier** | `gemini-2.0-flash`; key at aistudio.google.com |
+| **Groq** | 🆓 **free tier** | Fast, open models (Llama 3.3 70B); console.groq.com |
+| **Ollama** | 🆓 **free, local** | Runs offline on your machine; no API key, full privacy |
+| **OpenRouter** | Mixed | Aggregator; some `:free` models |
+| **DeepSeek / Mistral / OpenAI** | Cheap–paid | OpenAI-compatible |
+| **Custom** | — | Any OpenAI-compatible endpoint (your own base URL) |
+
+**Recommendation:** for zero cost use **Gemini** or **Groq** (free tiers) for
+convenience, or **Ollama** for fully-local/private grading. Use **Claude** when
+grading quality and consistency matter most. Quality of feedback and calibration
+fidelity track the underlying model — small local models are cheaper but blunter.
+Add a provider in `src/providers.py` (`PROVIDER_PRESETS`).
 
 ### Workflow
 
@@ -82,11 +106,13 @@ overflow), tiny cohorts, and identical scores.
 
 ### Prompt caching & cost
 
-The expensive, static context — the persona/instructions plus this session's
-task, rubric and four reference samples — is sent as **cached system blocks**
-(`cache_control: ephemeral`). Only the per-student report varies, so every
-report after the first reads that large prefix from cache (~0.1× input cost).
-See `src/prompts.py` → `build_grading_system_blocks`.
+On the **Claude** path the expensive static context — the persona/instructions
+plus this session's task, rubric and four reference samples — is sent as
+**cached system blocks** (`cache_control: ephemeral`). Only the per-student
+report varies, so every report after the first reads that large prefix from
+cache (~0.1× input cost). See `src/prompts.py` → `build_grading_system_blocks`.
+OpenAI-compatible providers send the same context as a plain system message
+(`build_grading_system_text`); some of them apply their own server-side caching.
 
 ---
 
@@ -99,8 +125,9 @@ automarking/
 │   ├── config.py           # Model + calibration targets
 │   ├── models.py           # Pydantic schemas (LLM contract + internal types)
 │   ├── document_parser.py  # DOCX / PDF / TXT / ZIP → text
-│   ├── prompts.py          # The Master grading prompt + cached context builder
+│   ├── prompts.py          # The Master grading prompt + context builders
 │   ├── llm_client.py       # Anthropic SDK wrapper (parse + caching + thinking)
+│   ├── providers.py        # Provider registry + OpenAI-compatible adapter
 │   ├── calibration.py      # The Two-Pass calibration engine
 │   ├── grading_engine.py   # Orchestration of Pass 1 → Pass 2 → adjustment
 │   └── docx_export.py      # Rubric-shaped .docx generation
@@ -114,12 +141,14 @@ automarking/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # add your ANTHROPIC_API_KEY
+cp .env.example .env        # add a key for whichever provider you'll use
 streamlit run app.py
 ```
 
 Then in the browser:
 
+0. In the **sidebar**, pick a provider (e.g. *Google Gemini · 🆓* or *Ollama ·
+   🆓*) and model. Paste a key, or set the matching env var in `.env`.
 1. **New Grading Session** and name the assignment.
 2. Upload the **Task**, the **Rubric**, and the four **reference samples**
    (High Distinction, Distinction, Average, Pass), then **Structure rubric**.
