@@ -72,6 +72,17 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
     row("Fails (<50%)", str(calib.fail_count))
     doc.add_paragraph()
 
+    if calib.low_discrimination:
+        warn = doc.add_paragraph()
+        run = warn.add_run(
+            "⚠ Low differentiation: the model gave very similar raw scores "
+            f"(spread ±{calib.raw_std:.1f}), so the calibrated grades barely "
+            "separate students. Consider re-grading with a stronger model."
+        )
+        run.italic = True
+        run.font.color.rgb = RGBColor.from_string("B00020")
+        doc.add_paragraph()
+
 
 def _add_student_section(doc: Document, report: CalibratedReport) -> None:
     heading = doc.add_heading(report.student_identifier, level=1)
@@ -95,8 +106,14 @@ def _add_student_section(doc: Document, report: CalibratedReport) -> None:
         cells[1].text = f"{component.score:g}"
         cells[2].text = f"{component.max_score:g}"
         notes_cell = cells[3]
-        notes_cell.text = ""
-        for note in component.notes:
+        notes = component.notes or ["—"]
+        # Reuse the cell's default (empty) paragraph for the first bullet so
+        # there's no blank line at the top of the cell.
+        first = notes_cell.paragraphs[0]
+        first.text = notes[0]
+        first.style = "List Bullet"
+        first.paragraph_format.space_after = Pt(0)
+        for note in notes[1:]:
             p = notes_cell.add_paragraph(note, style="List Bullet")
             p.paragraph_format.space_after = Pt(0)
 

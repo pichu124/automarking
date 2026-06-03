@@ -576,6 +576,16 @@ def _render_results() -> None:
         cols[2].metric("DI (70-79%)", f"{calib.di_count}", help=f"cap {calib.di_cap}")
         cols[3].metric("Fails (<50%)", f"{calib.fail_count}")
         cols[4].metric("Reports", f"{calib.n}")
+        if calib.low_discrimination:
+            st.warning(
+                f"⚠️ **Low differentiation.** The model gave very similar raw "
+                f"scores (raw mean {calib.raw_mean:.1f}%, spread ±{calib.raw_std:.1f}; "
+                f"only {calib.distinct_finals} distinct final grades for {calib.n} "
+                "reports). It isn't really separating students — calibration can "
+                "only rank what the model produced. **Re-grade with a stronger "
+                "model** (e.g. Claude, or a paid model like gpt-4o-mini/DeepSeek) "
+                "for grades that discriminate."
+            )
 
     if result.reports:
         st.subheader("Calibrated grades")

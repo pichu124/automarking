@@ -34,6 +34,7 @@ binary search guarantees the mean; the soft floor minimises fails.
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
 from typing import List, Sequence
 
@@ -53,6 +54,19 @@ class CalibrationReport:
     hd_cap: int
     di_cap: int
     shift: float
+    raw_std: float = 0.0          # spread of the model's raw scores
+    distinct_finals: int = 0      # how many distinct calibrated totals
+
+    @property
+    def low_discrimination(self) -> bool:
+        """True when the model barely differentiated the cohort.
+
+        A tiny raw spread means every report got ~the same score, so the
+        calibrated grades cannot meaningfully rank students.
+        """
+        if self.n < 3:
+            return False
+        return self.raw_std < 6.0 or self.distinct_finals <= max(2, self.n // 4)
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -147,6 +161,8 @@ def calibrate_scores(
         hd_cap=n_hd,
         di_cap=n_di,
         shift=round(t, 2),
+        raw_std=round(statistics.pstdev(raw_totals), 2) if n > 1 else 0.0,
+        distinct_finals=len(set(final)),
     )
     return final, report
 

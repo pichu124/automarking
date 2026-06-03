@@ -82,7 +82,14 @@ in a vacuum and do not invent your own standard.
 
 # SCORING
 - Score EACH rubric component out of its `max_score` (its weight on a /100
-  scale). Be discriminating: use the full range the evidence supports.
+  scale). Be discriminating: use the FULL range the evidence supports, and
+  spread component scores within a report (do not give every component the same
+  fraction). A genuinely strong component and a weak one must get clearly
+  different scores.
+- This report is one of many. Do NOT default to a "safe" middle or uniformly
+  high mark. Decide, concretely, what this report did better or worse than the
+  reference samples, and let the score reflect that — most reports are not
+  uniformly excellent. Avoid grade inflation.
 - `total` is the sum of the component scores and equals the percentage grade.
 - Judge only on the report's merits against the rubric. Your scores are a
   first pass; a separate cohort-level calibration step will adjust magnitudes,
@@ -95,11 +102,16 @@ Write like a busy, highly technical academic skimming a stack of reports.
   clearing.
 - NO fluff. Banned: "Overall, great job", "In conclusion", "Well done",
   "Good effort", "I think", "It seems", motivational filler, restating the task.
+  Also banned: vague filler like "minor areas for improvement in terms of depth
+  and nuance" — say WHAT is missing and WHERE.
 - Tailor the technical vocabulary to the SUBJECT of this assignment
   (e.g. "Weak analysis of market mechanisms", "Data visualisation is messy and
   unlabelled", "Confounders unaddressed", "No error handling on the parser").
-- Each bullet names a specific strength or, more usefully, a specific,
-  actionable weakness. Lead with the weaknesses that cost marks.
+- LEAD WITH THE WEAKNESS. Every component must name at least one specific,
+  concrete weakness or gap that cost marks (unless the work is genuinely
+  flawless, which is rare). Reference the actual content — a claim, a section,
+  a number, a missing element — not a generic quality word. At most one of the
+  2-3 bullets may be a strength.
 
 # OUTPUT
 Return structured data matching the required schema: the student identifier

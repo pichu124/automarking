@@ -86,6 +86,21 @@ def test_empty():
     assert report.n == 0
 
 
+def test_low_discrimination_flagged_when_model_uniform():
+    # Model gave everyone ~88 (the real-world failure mode) -> tiny spread.
+    raw = [88.0 + (i % 2) * 0.3 for i in range(12)]
+    _, report = calibrate_scores(raw)
+    assert report.raw_std < 6.0
+    assert report.low_discrimination is True
+
+
+def test_low_discrimination_not_flagged_for_real_spread():
+    random.seed(7)
+    raw = [max(0, min(100, random.gauss(70, 14))) for _ in range(30)]
+    _, report = calibrate_scores(raw)
+    assert report.low_discrimination is False
+
+
 def test_rescale_components_sums_to_total():
     scores = [30.0, 25.0, 20.0]
     maxes = [40.0, 30.0, 30.0]
