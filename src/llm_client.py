@@ -70,6 +70,19 @@ class GradingLLM:
             raise RuntimeError("Rubric structuring returned no parseable output.")
         return _normalise_weights(rubric)
 
+    # --- Generic text completion (used for sample summarisation) ----------
+
+    def complete_text(self, system: str, user: str, max_tokens: int = 1200) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            thinking={"type": "adaptive"},
+            output_config={"effort": self.effort},
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(b.text for b in response.content if b.type == "text").strip()
+
     # --- Pass 1: grade one report -----------------------------------------
 
     def grade_report(

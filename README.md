@@ -75,6 +75,19 @@ you have headroom. Local models give rougher feedback than Claude/Gemini and may
 occasionally emit malformed JSON (those reports are recorded as errors and the
 batch continues). For best local quality, prefer a 14B+ instruct model.
 
+### Compact anchor profiles (don't truncate samples — distil them)
+
+Trimming a reference sample to fit a small context means the model only sees its
+opening. Instead, use **🧭 Read & compress samples** (after structuring the
+rubric): the model reads each sample **in full, once**, and distils it into a
+~150-word "anchor profile" capturing the whole paper's quality per rubric
+component. Grading then anchors on the profiles — which cut the sample portion of
+each request from ~24k tokens (four full papers) to ~500 tokens, so even an
+8B model on Ollama keeps the full-sample calibration signal. Toggle it off to go
+back to raw samples. Big-context models (Claude/Gemini) can skip it and read full
+samples directly. Logic: `summarize_samples_with_fallback` in
+`src/grading_engine.py`.
+
 ### Context size & free-tier limits
 
 Each grading request bundles the task, rubric, four reference samples and one

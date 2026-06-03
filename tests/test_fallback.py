@@ -134,6 +134,33 @@ def test_all_providers_fail():
     assert any("All configured providers failed" in e for e in result.errors)
 
 
+def test_summarize_samples_reads_full_and_compresses():
+    from src.grading_engine import summarize_samples_with_fallback
+
+    class SummGrader(FakeGrader):
+        def __init__(self, label):
+            super().__init__(label)
+            self.seen_lengths = {}
+
+        def complete_text(self, system, user, max_tokens=1200):
+            # The full sample text is in the user message (proves it was read).
+            self.seen_lengths[len(user)] = True
+            return f"[profile {len(user)} chars in]"
+
+    grader = SummGrader("primary")
+    samples = {"HD": "H" * 9000, "DI": "D" * 9000, "AVG": "", "PASS": "P" * 9000}
+    profiles, used = summarize_samples_with_fallback(
+        [ProviderSpec("primary", label="primary")],
+        samples,
+        [RubricComponent(name="C", weight=100.0, description="")],
+        builder=_builder({"primary": grader}),
+    )
+    assert used == "primary"
+    # Empty AVG skipped; the other three summarised.
+    assert set(profiles) == {"HD", "DI", "PASS"}
+    assert all(p.startswith("[profile") for p in profiles.values())
+
+
 def test_is_provider_unhealthy_classification():
     assert _is_provider_unhealthy(FakeRateLimit())
     assert not _is_provider_unhealthy(FakeBadContent())

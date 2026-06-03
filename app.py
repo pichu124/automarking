@@ -25,10 +25,12 @@ from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
 from src.estimator import compare_providers, estimate_batch, static_context_text
 from src.grading_engine import (
+    SAMPLE_LEVELS,
     GradingSession,
     ProviderSpec,
     grade_batch_with_fallback,
     structure_rubric_with_fallback,
+    summarize_samples_with_fallback,
 )
 from src.providers import PROVIDER_PRESETS, preset_is_usable
 
@@ -335,6 +337,58 @@ def calibration_data_ui() -> None:
                 for c in st.session_state["components"]
             ]
         )
+        _sample_compression_ui()
+
+
+def _sample_compression_ui() -> None:
+    """Compress full reference samples into compact anchor profiles.
+
+    The model reads each sample in full once, then grading uses the short
+    profile — so small-context models (Ollama) keep the calibration signal of
+    the whole sample without sending the whole (truncated) text every request.
+    """
+    samples = st.session_state["reference_samples"]
+    has_samples = any((samples.get(k) or "").strip() for k in SAMPLE_LEVELS)
+    if not has_samples:
+        return
+
+    st.markdown("**🧭 Reference samples → compact anchors** "
+                "(recommended for small-context models like Ollama)")
+    st.caption(
+        "The model reads each FULL sample once and distils it into a ~150-word "
+        "profile of the whole paper. Grading then uses the profile, so requests "
+        "stay tiny without truncating the samples mid-way. Big-context models "
+        "(Claude/Gemini) can skip this and read full samples directly."
+    )
+    if st.button("Read & compress samples"):
+        progress = st.progress(0.0, text="Starting…")
+
+        def cb(done: int, total: int, label: str) -> None:
+            progress.progress(min(1.0, done / max(1, total)), text=label)
+
+        try:
+            profiles, used = summarize_samples_with_fallback(
+                _provider_chain(), samples, st.session_state["components"], progress_callback=cb
+            )
+            st.session_state["sample_profiles"] = profiles
+            st.session_state["use_profiles"] = True
+            st.success(f"Compressed {len(profiles)} sample(s) with {used}.")
+        except Exception as exc:
+            st.error(f"Sample compression failed: {exc}")
+        finally:
+            progress.empty()
+
+    if st.session_state.get("sample_profiles"):
+        st.session_state["use_profiles"] = st.checkbox(
+            "Use compact anchor profiles for grading",
+            value=st.session_state.get("use_profiles", True),
+        )
+        with st.expander("Review anchor profiles"):
+            for key, label in SAMPLE_LEVELS.items():
+                prof = st.session_state["sample_profiles"].get(key)
+                if prof:
+                    st.markdown(f"**{label}**")
+                    st.write(prof)
 
 
 def batch_ui() -> None:
@@ -356,12 +410,19 @@ def batch_ui() -> None:
                 + (" …" if len(docs) > 8 else ""))
 
 
+def _effective_samples() -> dict:
+    """Use compact anchor profiles for grading when available + enabled."""
+    if st.session_state.get("use_profiles") and st.session_state.get("sample_profiles"):
+        return st.session_state["sample_profiles"]
+    return st.session_state["reference_samples"]
+
+
 def _session_from_state() -> GradingSession:
     return GradingSession(
         task_text=st.session_state["task_text"],
         rubric_text=st.session_state["rubric_text"],
         components=st.session_state["components"],
-        reference_samples=st.session_state["reference_samples"],
+        reference_samples=_effective_samples(),
         name=st.session_state["session_name"] or "Untitled session",
     )
 

@@ -33,9 +33,19 @@ from typing import Callable, List, Optional, Protocol, Sequence
 from .calibration import CalibrationConfig, CalibrationReport, calibrate_scores, rescale_components
 from .document_parser import ParsedDocument
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
+from . import config
+from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user
 from .providers import build_provider
 
 ProgressCallback = Callable[[int, int, str], None]
+
+# Reference-sample slots and their human labels.
+SAMPLE_LEVELS = {
+    "HD": "High Distinction",
+    "DI": "Distinction",
+    "AVG": "Average",
+    "PASS": "Pass",
+}
 
 
 class Grader(Protocol):
@@ -53,6 +63,8 @@ class Grader(Protocol):
         source_name: str,
         report_text: str,
     ) -> GradingResult: ...
+
+    def complete_text(self, system: str, user: str, max_tokens: int = ...) -> str: ...
 
 
 @dataclass
@@ -343,6 +355,44 @@ def structure_rubric_with_fallback(
         except Exception as exc:  # try the next provider
             last_error = exc
     raise RuntimeError(f"Rubric structuring failed on all providers: {last_error}")
+
+
+def summarize_samples_with_fallback(
+    specs: Sequence[ProviderSpec],
+    samples: dict,
+    components: List[RubricComponent],
+    builder: GraderBuilder = _default_builder,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[dict, str]:
+    """Compress each reference sample into a compact anchor profile.
+
+    The model reads each sample IN FULL (one at a time) and distils it into a
+    short profile that captures the whole paper's quality — so grading anchors
+    survive even on small-context models, where sending the raw samples would
+    force lossy truncation. Returns (profiles, provider_label).
+    """
+    present = [(k, (samples.get(k) or "").strip()) for k in SAMPLE_LEVELS]
+    present = [(k, body) for k, body in present if body]
+    total = len(present)
+
+    last_error: Optional[Exception] = None
+    for spec in specs:
+        try:
+            grader = builder(spec)
+            profiles: dict = {}
+            for idx, (key, body) in enumerate(present):
+                if progress_callback:
+                    progress_callback(idx, total, f"Reading {SAMPLE_LEVELS[key]} sample")
+                user = build_sample_summary_user(SAMPLE_LEVELS[key], body, components)
+                profiles[key] = grader.complete_text(
+                    SAMPLE_SUMMARY_SYSTEM, user, config.SAMPLE_SUMMARY_MAX_TOKENS
+                )
+            if progress_callback:
+                progress_callback(total, total, "Done")
+            return profiles, spec.display
+        except Exception as exc:  # try the next provider
+            last_error = exc
+    raise RuntimeError(f"Sample summarisation failed on all providers: {last_error}")
 
 
 def _clamp_total(total: float) -> float:

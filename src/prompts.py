@@ -30,6 +30,22 @@ def cap_text(text: str, max_chars: int) -> str:
 
 # --- Rubric structuring ----------------------------------------------------
 
+SAMPLE_SUMMARY_SYSTEM = """\
+You calibrate grading standards. You are given ONE graded exemplar paper at a
+known level (High Distinction / Distinction / Average / Pass) and the rubric.
+
+Read the WHOLE paper and write a compact "anchor profile" of 120-200 words that
+captures what puts this paper at its level — faithfully across the entire paper,
+not just the opening. Cover, per rubric component where relevant: the depth and
+quality of analysis, structure, evidence/data use, technical sophistication, and
+the notable strengths and weaknesses that justify this grade band.
+
+This profile replaces the full paper as the grading anchor, so it must let
+another grader reproduce the standard without seeing the original. Be specific
+and technical. No fluff, no preamble.
+"""
+
+
 RUBRIC_STRUCTURING_PROMPT = """\
 You convert a marking rubric into a structured, weighted component list.
 
@@ -194,6 +210,22 @@ def build_grading_system_text(
     return (
         f"{GRADING_SYSTEM_PROMPT}\n\n{session_context}\n\n"
         f"# OUTPUT FORMAT\n{GRADING_JSON_INSTRUCTION}"
+    )
+
+
+def build_sample_summary_user(
+    level_label: str,
+    sample_text: str,
+    components: List[RubricComponent],
+) -> str:
+    """User message for compressing one reference sample into an anchor profile."""
+    return (
+        f"Graded exemplar level: {level_label}\n\n"
+        "# RUBRIC COMPONENTS\n"
+        f"{_format_components(components)}\n\n"
+        "# THE FULL EXEMPLAR PAPER (read all of it)\n"
+        f"{cap_text(sample_text, config.MAX_SAMPLE_SUMMARY_INPUT_CHARS)}\n\n"
+        "Write the anchor profile now."
     )
 
 

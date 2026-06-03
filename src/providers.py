@@ -149,6 +149,9 @@ class AnthropicProvider:
     def grade_report(self, **kwargs) -> GradingResult:
         return self.llm.grade_report(**kwargs)
 
+    def complete_text(self, system: str, user: str, max_tokens: int = 1200) -> str:
+        return self.llm.complete_text(system, user, max_tokens)
+
 
 # --- OpenAI-compatible (Gemini / Groq / Ollama / OpenRouter / ...) ---------
 
@@ -181,6 +184,18 @@ class OpenAICompatibleProvider:
             base_url=base_url or None,
             max_retries=max_retries,
         )
+
+    def complete_text(self, system: str, user: str, max_tokens: int = 1200) -> str:
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens,
+            temperature=self.temperature,
+        )
+        return (resp.choices[0].message.content or "").strip()
 
     def _chat_json(self, system: str, user: str, max_tokens: int) -> dict:
         messages = [
