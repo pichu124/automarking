@@ -15,9 +15,10 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT
+from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
+from src.estimator import compare_providers, estimate_batch, static_context_text
 from src.grading_engine import (
     GradingSession,
     ProviderSpec,
@@ -294,6 +295,64 @@ def batch_ui() -> None:
                 + (" …" if len(docs) > 8 else ""))
 
 
+def _session_from_state() -> GradingSession:
+    return GradingSession(
+        task_text=st.session_state["task_text"],
+        rubric_text=st.session_state["rubric_text"],
+        components=st.session_state["components"],
+        reference_samples=st.session_state["reference_samples"],
+        name=st.session_state["session_name"] or "Untitled session",
+    )
+
+
+def _estimate_ui(session: GradingSession) -> None:
+    docs = st.session_state["documents"]
+    provider_key = st.session_state.get("provider_key", "anthropic")
+    preset = PROVIDER_PRESETS[provider_key]
+    est = estimate_batch(
+        provider_key=provider_key,
+        provider_label=preset.label,
+        model=st.session_state.get("model") or preset.default_model,
+        static_context_text=static_context_text(session),
+        report_texts=[d.text for d in docs],
+        n_components=len(session.components),
+        pricing=PROVIDER_PRICING.get(provider_key),
+    )
+    with st.expander("📊 Estimate cost & time (before you run)", expanded=True):
+        cols = st.columns(4)
+        cols[0].metric("Reports", est.n_reports)
+        cols[1].metric("Est. cost", est.cost_label, help=f"{preset.label} · {est.model}")
+        cols[2].metric("Est. time", est.time_label)
+        cols[3].metric(
+            "Tokens in/out",
+            f"{est.input_tokens_billed:,} / {est.output_tokens:,}",
+        )
+        if est.supports_cache:
+            st.caption(
+                f"Prompt caching applied: the shared context (~{est.static_tokens:,} "
+                "tokens) is written once, then read at ~0.1× for every later report."
+            )
+        st.markdown("**Compare providers** — default model, cheapest first:")
+        comparison = compare_providers(session, docs, PROVIDER_PRESETS)
+        st.dataframe(
+            [
+                {
+                    "Provider": e.provider_label,
+                    "Model": e.model,
+                    "Est. cost": e.cost_label,
+                    "Est. time": e.time_label,
+                }
+                for e in comparison
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "⚠️ Indicative only: token counts are estimated locally (~4 chars/token) "
+            "and the prices in `src/config.py` are approximate and change over time."
+        )
+
+
 def grade_ui() -> None:
     st.header("3 · Grade & Calibrate")
     ready = bool(
@@ -303,15 +362,11 @@ def grade_ui() -> None:
     )
     if not ready:
         st.caption("Need: a task, structured rubric components, and at least one report.")
+    else:
+        _estimate_ui(_session_from_state())
 
     if st.button("🚀 Run Two-Pass Grading", type="primary", disabled=not ready):
-        session = GradingSession(
-            task_text=st.session_state["task_text"],
-            rubric_text=st.session_state["rubric_text"],
-            components=st.session_state["components"],
-            reference_samples=st.session_state["reference_samples"],
-            name=st.session_state["session_name"] or "Untitled session",
-        )
+        session = _session_from_state()
         progress = st.progress(0.0, text="Starting…")
 
         def cb(done: int, total: int, label: str) -> None:

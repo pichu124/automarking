@@ -126,6 +126,17 @@ including the adversarial cases: a cohort the LLM graded all-high (must compress
 down), all-low (must lift up and zero out fails), a compressed top band (DI
 overflow), tiny cohorts, and identical scores.
 
+### Pre-flight cost & time estimate
+
+Before running a batch, the **Grade** screen shows a "📊 Estimate cost & time"
+panel: estimated cost, time range, and token counts for the selected provider,
+plus a **provider comparison table** (cheapest first) so you can pick the
+best-value option. The Claude estimate accounts for prompt caching (the shared
+context is billed once, then read at ~0.1× per later report). Estimates are
+indicative — token counts use a local ~4-chars/token heuristic and the prices in
+`src/config.py` (`PROVIDER_PRICING`) are approximate and editable. Logic and
+tests: `src/estimator.py`, `tests/test_estimator.py`.
+
 ### Prompt caching & cost
 
 On the **Claude** path the expensive static context — the persona/instructions
@@ -150,6 +161,7 @@ automarking/
 │   ├── prompts.py          # The Master grading prompt + context builders
 │   ├── llm_client.py       # Anthropic SDK wrapper (parse + caching + thinking)
 │   ├── providers.py        # Provider registry + OpenAI-compatible adapter
+│   ├── estimator.py        # Pre-flight cost/time estimate + provider compare
 │   ├── calibration.py      # The Two-Pass calibration engine
 │   ├── grading_engine.py   # Orchestration of Pass 1 → Pass 2 → adjustment
 │   └── docx_export.py      # Rubric-shaped .docx generation

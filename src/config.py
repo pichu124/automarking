@@ -56,3 +56,41 @@ class CalibrationConfig:
 
 
 DEFAULT_CALIBRATION = CalibrationConfig()
+
+
+# --- Pricing (for the pre-flight cost/time estimate) ----------------------
+
+@dataclass(frozen=True)
+class ModelPricing:
+    """Approximate pricing + latency for a provider's default model.
+
+    USD per 1,000,000 tokens. These move often and vary by exact model — they
+    are INDICATIVE only and editable here. Free-tier providers are priced at
+    their paid rate for the estimate but flagged ``free_tier`` so the UI can
+    show "Free tier" instead of a dollar figure.
+    """
+
+    input_per_1m: float
+    output_per_1m: float
+    supports_cache: bool = False         # Claude prompt caching
+    cache_read_mult: float = 0.1
+    cache_write_mult: float = 1.25
+    free_tier: bool = False
+    seconds_per_report: float = 8.0      # rough per-report latency guess
+
+
+# Keyed by provider key (see providers.PROVIDER_PRESETS). Approximate, ~2026.
+PROVIDER_PRICING: dict[str, ModelPricing] = {
+    "anthropic": ModelPricing(5.0, 25.0, supports_cache=True, seconds_per_report=22.0),
+    "gemini": ModelPricing(0.10, 0.40, free_tier=True, seconds_per_report=5.0),
+    "groq": ModelPricing(0.59, 0.79, free_tier=True, seconds_per_report=3.0),
+    "ollama": ModelPricing(0.0, 0.0, free_tier=True, seconds_per_report=15.0),
+    "openrouter": ModelPricing(0.60, 0.70, seconds_per_report=6.0),
+    "deepseek": ModelPricing(0.28, 0.42, seconds_per_report=8.0),
+    "mistral": ModelPricing(2.0, 6.0, seconds_per_report=6.0),
+    "openai": ModelPricing(0.15, 0.60, seconds_per_report=6.0),
+    "custom": ModelPricing(0.0, 0.0, seconds_per_report=8.0),
+}
+
+# Used when a provider key has no pricing entry.
+DEFAULT_PRICING = ModelPricing(1.0, 4.0, seconds_per_report=8.0)
