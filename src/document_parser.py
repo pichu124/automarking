@@ -39,7 +39,22 @@ def _read_docx(data: bytes) -> str:
 
 def _read_pdf(data: bytes) -> str:
     reader = PdfReader(io.BytesIO(data))
-    return "\n".join((page.extract_text() or "") for page in reader.pages)
+    parts: List[str] = []
+    for page in reader.pages:
+        # "plain" mode avoids pypdf's layout-mode width maths, which can crash
+        # on PDFs whose font-width entries are unresolved indirect objects
+        # (TypeError: unsupported operand type(s) for <: 'float' and ...).
+        # A per-page guard means one bad page never sinks the whole document.
+        try:
+            parts.append(page.extract_text(extraction_mode="plain") or "")
+        except TypeError:  # older pypdf without the kwarg (already plain)
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:
+                parts.append("")
+        except Exception:
+            parts.append("")
+    return "\n".join(parts)
 
 
 def _read_text(data: bytes) -> str:
@@ -51,14 +66,20 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     lowered = name.lower()
     if lowered.endswith(".zip"):
         return _parse_zip(data)
-    if lowered.endswith(".docx"):
-        return [ParsedDocument(name, _read_docx(data))]
-    if lowered.endswith(".pdf"):
-        return [ParsedDocument(name, _read_pdf(data))]
-    if lowered.endswith(_TEXT_EXTS):
-        return [ParsedDocument(name, _read_text(data))]
-    # Unknown extension: best-effort decode so nothing is silently dropped.
-    return [ParsedDocument(name, _read_text(data))]
+    # A single unreadable file must never crash the app — surface a placeholder.
+    try:
+        if lowered.endswith(".docx"):
+            text = _read_docx(data)
+        elif lowered.endswith(".pdf"):
+            text = _read_pdf(data)
+        elif lowered.endswith(_TEXT_EXTS):
+            text = _read_text(data)
+        else:
+            # Unknown extension: best-effort decode so nothing is silently dropped.
+            text = _read_text(data)
+    except Exception as exc:
+        text = f"[Could not read {name}: {exc}]"
+    return [ParsedDocument(name, text)]
 
 
 def _parse_zip(data: bytes) -> List[ParsedDocument]:
