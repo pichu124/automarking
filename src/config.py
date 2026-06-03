@@ -23,14 +23,18 @@ RUBRIC_MAX_TOKENS = 4000
 
 # --- Context size caps (characters) ---------------------------------------
 # Each grading request bundles the task, rubric, four reference samples and the
-# student report. Reference samples are often FULL graded papers, which can push
-# a single request past free-tier token-per-minute limits (e.g. Groq's 12k TPM)
-# and inflate cost. These caps trim each piece; ~4 chars/token. Edit freely —
-# raise them on Claude/Gemini (huge context), lower them for tight free tiers.
-MAX_TASK_CHARS = 6000          # ≈ 1.5k tokens
-MAX_RUBRIC_CHARS = 8000        # ≈ 2k tokens
-MAX_SAMPLE_CHARS = 6000        # per reference sample, ≈ 1.5k tokens
-MAX_REPORT_CHARS = 16000       # per student report, ≈ 4k tokens
+# student report. These caps are a SAFETY VALVE against pathologically large
+# files (e.g. a 3.4MB PDF that extracts to hundreds of KB of text) and tight
+# free-tier token-per-minute limits — NOT a routine trim. Defaults are generous:
+# a normal full assignment (≈2,500 words ≈ 16k chars) and full reference papers
+# are read in their entirety; only unusually long files are shortened, and the
+# UI warns when that happens. ~4 chars/token. Set any cap to 0 to disable it
+# (read everything) — best with large-context models (Claude, Gemini, Ollama);
+# lower them only to fit small free tiers like Groq (~12k TPM).
+MAX_TASK_CHARS = 16000         # ≈ 4k tokens
+MAX_RUBRIC_CHARS = 16000       # ≈ 4k tokens
+MAX_SAMPLE_CHARS = 24000       # per reference sample, ≈ 6k tokens (~3,700 words)
+MAX_REPORT_CHARS = 40000       # per student report, ≈ 10k tokens (~6,000 words)
 
 
 # --- Calibration targets (the "curve") ------------------------------------

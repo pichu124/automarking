@@ -49,12 +49,16 @@ Add a provider in `src/providers.py` (`PROVIDER_PRESETS`).
 ### Context size & free-tier limits
 
 Each grading request bundles the task, rubric, four reference samples and one
-student report. Reference samples are often full graded papers, so requests can
-balloon to tens of thousands of tokens — which blows past tight free-tier
-token-per-minute limits and inflates cost. The app therefore **caps** each piece
-(`MAX_TASK_CHARS`, `MAX_RUBRIC_CHARS`, `MAX_SAMPLE_CHARS`, `MAX_REPORT_CHARS` in
-`src/config.py`); a truncated excerpt still anchors the standard well. Defaults
-keep a request near ~14k tokens.
+student report. The app applies **generous length caps** as a *safety valve*
+(`MAX_*_CHARS` in `src/config.py`) — **not** a routine trim. Defaults are sized
+so a normal full assignment (≈2,500 words) and full reference papers are read in
+their **entirety**; only pathologically large files (e.g. a 3.4MB PDF that
+extracts to hundreds of KB) are shortened. When truncation would happen, the
+"📊 Estimate" panel **warns you exactly which documents** are affected, so no
+information is ever lost silently. You control it live: the sidebar **📏
+Document length** sets the per-document cap, and **0 = read everything** (best
+with large-context models like Claude or Gemini). Lower it only to fit tight
+free tiers like Groq.
 
 Provider notes:
 - **Groq free tier ≈ 12k tokens/min** — too small for a full rubric + four

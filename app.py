@@ -15,7 +15,11 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
+from src import config
 from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
+
+# Baseline cap captured before any runtime override (used as the UI default).
+_BASE_DOC_CAP = config.MAX_REPORT_CHARS
 from src.docx_export import build_grade_document
 from src.document_parser import ParsedDocument, parse_upload
 from src.estimator import compare_providers, estimate_batch, static_context_text
@@ -202,6 +206,27 @@ def sidebar() -> None:
         ]
         st.caption("Grading order: " + " → ".join(chain_labels))
 
+        # --- How much of each document to send ---------------------------
+        st.divider()
+        st.subheader("📏 Document length")
+        cap = st.number_input(
+            "Max characters per document (0 = read everything)",
+            min_value=0, max_value=400_000,
+            value=int(st.session_state.get("doc_cap", _BASE_DOC_CAP)), step=2000,
+            help="How much of each student report / reference sample to send to "
+                 "the model. 0 = no limit (best with large-context models like "
+                 "Claude or Gemini). Lower it only to fit tight free tiers (Groq).",
+        )
+        st.session_state["doc_cap"] = cap
+        # Apply at runtime — prompts read these from config on each call.
+        config.MAX_REPORT_CHARS = cap
+        config.MAX_SAMPLE_CHARS = cap
+        if cap == 0:
+            st.caption("Reading full documents — nothing is truncated.")
+        else:
+            st.caption(f"≈ {cap // 4:,} tokens max per document. A 2,500-word "
+                       "assignment (~16k chars) fits with room to spare.")
+
         st.divider()
         st.subheader("Calibration targets")
         c = DEFAULT_CALIBRATION
@@ -345,6 +370,28 @@ def _estimate_ui(session: GradingSession) -> None:
             "Tokens in/out",
             f"{est.input_tokens_billed:,} / {est.output_tokens:,}",
         )
+
+        # Transparency: tell the professor exactly what (if anything) is trimmed.
+        cap_r, cap_s = config.MAX_REPORT_CHARS, config.MAX_SAMPLE_CHARS
+        over_reports = [d.name for d in docs if cap_r and len(d.text) > cap_r]
+        over_samples = [
+            k for k, v in session.reference_samples.items() if v and cap_s and len(v) > cap_s
+        ]
+        if over_reports or over_samples:
+            bits = []
+            if over_reports:
+                bits.append(f"{len(over_reports)} report(s)")
+            if over_samples:
+                bits.append(f"sample(s) {', '.join(over_samples)}")
+            st.warning(
+                "✂️ At the current length limit, " + " and ".join(bits)
+                + " will be shortened (the model won't see the trimmed tail). "
+                "Raise **📏 Document length** in the sidebar (set 0 = read "
+                "everything) to grade them in full."
+            )
+        else:
+            st.caption("✅ No truncation — every document fits; the model reads each in full.")
+
         if est.supports_cache:
             st.caption(
                 f"Prompt caching applied: the shared context (~{est.static_tokens:,} "
