@@ -401,6 +401,12 @@ def _estimate_ui(session: GradingSession) -> None:
         else:
             st.caption("✅ No truncation — every document fits; the model reads each in full.")
 
+        st.caption(
+            f"One request ≈ {est.tokens_per_request_avg:,} tokens "
+            f"(largest ≈ {est.tokens_per_request_max:,}). For **Ollama**, set "
+            "`OLLAMA_CONTEXT_LENGTH` above this number, or lower 📏 Document "
+            "length until it fits."
+        )
         if est.supports_cache:
             st.caption(
                 f"Prompt caching applied: the shared context (~{est.static_tokens:,} "

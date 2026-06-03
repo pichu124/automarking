@@ -45,6 +45,10 @@ class BatchEstimate:
     supports_cache: bool
     seconds_low: float
     seconds_high: float
+    # Size of a single grading call (matters for a model's context window, e.g.
+    # Ollama's num_ctx) — the static context + one report + the JSON output.
+    tokens_per_request_avg: int = 0
+    tokens_per_request_max: int = 0
 
     @property
     def cost_label(self) -> str:
@@ -104,6 +108,10 @@ def estimate_batch(
         + output_tokens / 1_000_000 * pricing.output_per_1m
     )
 
+    base_per_request = static_tokens + USER_WRAPPER_TOKENS + out_per
+    avg_report = (sum(report_tokens) / n) if n else 0
+    max_report = max(report_tokens) if report_tokens else 0
+
     return BatchEstimate(
         provider_key=provider_key,
         provider_label=provider_label,
@@ -117,6 +125,8 @@ def estimate_batch(
         supports_cache=pricing.supports_cache,
         seconds_low=n * pricing.seconds_per_report * 0.6,
         seconds_high=n * pricing.seconds_per_report * 1.6,
+        tokens_per_request_avg=round(base_per_request + avg_report),
+        tokens_per_request_max=round(base_per_request + max_report),
     )
 
 
