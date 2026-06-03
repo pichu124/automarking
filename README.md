@@ -1,0 +1,153 @@
+# 🎓 AI Grading Studio
+
+A course-agnostic, rubric-aligned grading web app for university professors. The
+professor uploads the **task**, the **rubric**, and **four graded reference
+samples**, then batch-uploads a whole cohort of reports. The app grades each
+report against the rubric with Claude, then applies a **Two-Pass statistical
+calibration engine** so the final cohort grades obey a target distribution, and
+exports a structured **Microsoft Word** grade report.
+
+---
+
+## 1. Architecture
+
+### Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| UI | **Streamlit** | Fast to build, native file-upload + download widgets |
+| LLM | **Anthropic Claude** (`claude-opus-4-8`) via the official SDK | Strongest grading judgement; structured outputs + prompt caching |
+| Structured output | `messages.parse` + Pydantic (`output_config.format`) | Validated JSON, never brittle text parsing |
+| Doc parsing | `python-docx`, `pypdf`, `zipfile` | DOCX / PDF / TXT / ZIP ingestion |
+| Export | `python-docx` | The rubric-shaped `.docx` deliverable |
+| Calibration | Pure-Python, unit-tested | Deterministic, auditable, no LLM in the loop |
+
+### Workflow
+
+```
+New Session ─▶ Upload Task + Rubric + 4 Reference Samples ─▶ Structure Rubric
+     │                                                              │
+     ▼                                                              ▼
+Batch-upload all student reports  ──────────────▶  PASS 1: grade each report
+(PDF / DOCX / ZIP)                                  independently vs. rubric
+                                                    + reference anchors (Claude)
+                                                              │
+                                                              ▼
+                                          PASS 2: cohort curve calibration
+                                          (mean 65–66%, HD ≤10%, DI ≤20%,
+                                           fails minimised)
+                                                              │
+                                                              ▼
+                                          FINAL ADJUSTMENT: rescale each
+                                          report's component scores to its
+                                          calibrated total
+                                                              │
+                                                              ▼
+                                          Structured .docx grade report
+```
+
+### The Two-Pass calibration engine (`src/calibration.py`)
+
+The grader's job in Pass 1 is to get the **relative quality and the component
+breakdown** right; absolute magnitudes are fixed in Pass 2. The calibrator uses
+**banded rank mapping with mean targeting** to satisfy four hard constraints at
+once:
+
+1. **Rank** reports by raw total (descending). The LLM's ordering is treated as
+   ground truth — calibration never reorders, only rescales.
+2. **Band ceilings by rank** make the caps hold *by construction*:
+   - top `floor(0.10·N)` ranks → ceiling 95 (may reach HD)
+   - next `floor(0.20·N)` ranks → ceiling 79 (DI at most, never HD)
+   - everyone else → ceiling 69 (never DI/HD)
+   - a soft **floor of 50** for everyone — this is how "aggressively minimise
+     fails" is implemented.
+3. **Global additive shift + clamp.** One shift `t` is applied to every raw
+   score, then clamped into each rank's `[floor, ceiling]`. Because the raw
+   scores and the bounds are all non-increasing in rank, the clamp preserves
+   ordering, and the cohort mean is monotonic and continuous in `t` — so a
+   **binary search** lands the mean exactly inside `[65, 66]`.
+4. **DI-overflow correction.** A top-band report whose calibrated score lands in
+   `[70, 80)` still counts toward the DI cap. If the DI band overflows, the
+   lowest-ranked DI member is demoted to ceiling 69 and the shift is re-solved.
+   Each demotion permanently removes a rank from the DI-eligible set, so the
+   loop terminates.
+
+Then the **final adjustment** rescales each report's component scores
+proportionally so they sum to the calibrated total (`rescale_components`).
+
+The constraints are covered by unit tests (`tests/test_calibration.py`),
+including the adversarial cases: a cohort the LLM graded all-high (must compress
+down), all-low (must lift up and zero out fails), a compressed top band (DI
+overflow), tiny cohorts, and identical scores.
+
+### Prompt caching & cost
+
+The expensive, static context — the persona/instructions plus this session's
+task, rubric and four reference samples — is sent as **cached system blocks**
+(`cache_control: ephemeral`). Only the per-student report varies, so every
+report after the first reads that large prefix from cache (~0.1× input cost).
+See `src/prompts.py` → `build_grading_system_blocks`.
+
+---
+
+## 2. Project layout
+
+```
+automarking/
+├── app.py                  # Streamlit UI (sessions, uploads, batch, download)
+├── src/
+│   ├── config.py           # Model + calibration targets
+│   ├── models.py           # Pydantic schemas (LLM contract + internal types)
+│   ├── document_parser.py  # DOCX / PDF / TXT / ZIP → text
+│   ├── prompts.py          # The Master grading prompt + cached context builder
+│   ├── llm_client.py       # Anthropic SDK wrapper (parse + caching + thinking)
+│   ├── calibration.py      # The Two-Pass calibration engine
+│   ├── grading_engine.py   # Orchestration of Pass 1 → Pass 2 → adjustment
+│   └── docx_export.py      # Rubric-shaped .docx generation
+└── tests/test_calibration.py
+```
+
+---
+
+## 3. Running it
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env        # add your ANTHROPIC_API_KEY
+streamlit run app.py
+```
+
+Then in the browser:
+
+1. **New Grading Session** and name the assignment.
+2. Upload the **Task**, the **Rubric**, and the four **reference samples**
+   (High Distinction, Distinction, Average, Pass), then **Structure rubric**.
+3. **Batch-upload** all student reports (or one `.zip`).
+4. **Run Two-Pass Grading** — review the calibrated cohort.
+5. **Download** the `.docx` grade report.
+
+Run the tests with:
+
+```bash
+python -m pytest tests/ -v
+```
+
+---
+
+## 4. Output format
+
+The generated `.docx` leads with a **cohort summary** (calibrated mean, HD/DI
+counts vs. caps, fail count), then one page per student containing:
+
+- **Student name / ID** (extracted from the report, falling back to filename)
+- a **component table** that mirrors the uploaded rubric — `Component · Score ·
+  Max · Professor's Notes` — with 2–3 punchy, technical bullets per component
+- **Total / 100** and the grade band
+
+Feedback is written in a strict **busy-academic persona** (see
+`src/prompts.py`): direct, technical, no fluff, weaknesses first.
+
+> **Note on fairness.** The calibration curve is a hard administrative
+> distribution control. Professors should review the calibrated grades — the
+> app surfaces both raw and final scores so any large adjustment is visible.
