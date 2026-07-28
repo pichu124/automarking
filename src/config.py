@@ -15,10 +15,14 @@ from dataclasses import dataclass
 DEFAULT_MODEL = os.getenv("GRADING_MODEL", "claude-opus-4-8")
 DEFAULT_EFFORT = os.getenv("GRADING_EFFORT", "high")  # low | medium | high | max
 
-# max_tokens for a single graded report. Grading output is structured JSON and
-# bounded, so this is generous headroom rather than a streaming-scale ceiling.
-GRADING_MAX_TOKENS = 8000
-RUBRIC_MAX_TOKENS = 4000
+# max_tokens for a single graded report. IMPORTANT: on Claude, adaptive
+# thinking and the JSON answer share this budget — high-effort thinking on a
+# complex rubric can eat most of it and truncate the JSON ("EOF while parsing").
+# Keep generous headroom (16000 is the safe non-streaming ceiling). Reasoning
+# models on OpenRouter (R1, Gemma-reasoning) also spend tokens thinking, so the
+# headroom helps them too. Plain chat models simply cap out well below this.
+GRADING_MAX_TOKENS = 16000
+RUBRIC_MAX_TOKENS = 8000
 
 
 # --- Context size caps (characters) ---------------------------------------
@@ -41,7 +45,7 @@ MAX_REPORT_CHARS = 40000       # per student report, ≈ 10k tokens (~6,000 word
 # can be larger than MAX_SAMPLE_CHARS). The profile then anchors grading at a
 # fraction of the tokens — ideal for small-context models like Ollama.
 MAX_SAMPLE_SUMMARY_INPUT_CHARS = 40000
-SAMPLE_SUMMARY_MAX_TOKENS = 1200
+SAMPLE_SUMMARY_MAX_TOKENS = 4000  # headroom for thinking + the ~150-word profile
 
 
 # --- Calibration targets (the "curve") ------------------------------------
