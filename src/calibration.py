@@ -112,12 +112,17 @@ def calibrate_scores(
     boundary_thresholds = (cfg.credit_threshold, cfg.di_lower, cfg.hd_threshold)
 
     def avoid_boundaries(s: float) -> float:
+        # Keep scores out of the contestable just-below-cut-off zone (59, 69,
+        # 79): anything in [T - guard, T) is pushed down to T - guard, sitting
+        # clearly inside the lower band. Monotonic (only ever pushes down, never
+        # up across a threshold), so ranking, the HD/DI caps and the
+        # mean-targeting binary search are all preserved.
         if not cfg.avoid_band_boundaries:
             return s
         g = cfg.boundary_guard
         for threshold in boundary_thresholds:
             if threshold - g <= s < threshold:
-                return threshold - g  # push down, clearly into the lower band
+                return threshold - g
         return s
 
     def scores_for_shift(t: float) -> List[float]:
