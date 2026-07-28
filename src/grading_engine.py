@@ -103,6 +103,9 @@ class BatchResult:
     notes: List[str] = field(default_factory=list)        # fallback/audit trail
     provider_label: str = ""                              # who graded the cohort
     fell_back_from: List[str] = field(default_factory=list)
+    # Pass-1 output kept so the cohort can be re-calibrated (new mean/caps/
+    # boundary settings) WITHOUT re-calling the LLM — i.e. for free.
+    raw_grades: List[tuple] = field(default_factory=list)  # (source_name, GradingResult)
 
 
 # --- Provider-health classification ---------------------------------------
@@ -161,13 +164,15 @@ def _grade_pass1(
     documents: Sequence[ParsedDocument],
     progress_callback: ProgressCallback | None,
     raise_on_unhealthy: bool,
-) -> tuple[List[tuple[ParsedDocument, GradingResult]], List[str]]:
+) -> tuple[List[tuple[str, GradingResult]], List[str]]:
     """Grade every document with one grader.
 
     Raises ``ProviderUnavailable`` (when ``raise_on_unhealthy``) on the first
     provider-health failure, so the caller can discard partial work and switch.
+    Returns ``(source_name, GradingResult)`` pairs — the raw text is dropped so
+    the result can be re-calibrated later without holding the whole batch.
     """
-    raw_results: List[tuple[ParsedDocument, GradingResult]] = []
+    raw_results: List[tuple[str, GradingResult]] = []
     errors: List[str] = []
     total = len(documents)
     for idx, doc in enumerate(documents):
@@ -182,7 +187,7 @@ def _grade_pass1(
                 source_name=doc.name,
                 report_text=doc.text,
             )
-            raw_results.append((doc, graded))
+            raw_results.append((doc.name, graded))
         except Exception as exc:
             if raise_on_unhealthy and _is_provider_unhealthy(exc):
                 raise ProviderUnavailable(_label_for(grader), str(exc)) from exc
@@ -193,15 +198,19 @@ def _grade_pass1(
 
 
 def _finalize(
-    raw_results: Sequence[tuple[ParsedDocument, GradingResult]],
+    raw_results: Sequence[tuple[str, GradingResult]],
     calibration_config: CalibrationConfig | None,
 ) -> tuple[List[CalibratedReport], CalibrationReport]:
-    """Pass 2 + final adjustment for a completed Pass 1."""
+    """Pass 2 + final adjustment for a completed Pass 1.
+
+    Pure calculation — no LLM calls — so it can be re-run for free to apply new
+    calibration settings.
+    """
     raw_totals = [_clamp_total(g.total) for _, g in raw_results]
     final_totals, calib = calibrate_scores(raw_totals, calibration_config)
 
     reports: List[CalibratedReport] = []
-    for (doc, graded), raw_total, final_total in zip(raw_results, raw_totals, final_totals):
+    for (source_name, graded), raw_total, final_total in zip(raw_results, raw_totals, final_totals):
         max_scores = [c.max_score for c in graded.components]
         scores = [c.score for c in graded.components]
         new_scores = rescale_components(scores, max_scores, raw_total, final_total)
@@ -216,8 +225,8 @@ def _finalize(
         ]
         reports.append(
             CalibratedReport(
-                student_identifier=graded.student_identifier or doc.name,
-                source_name=doc.name,
+                student_identifier=graded.student_identifier or source_name,
+                source_name=source_name,
                 components=components,
                 raw_total=round(raw_total, 1),
                 final_total=round(final_total, 1),
@@ -248,6 +257,7 @@ def grade_batch(
     )
     if not raw_results:
         return result
+    result.raw_grades = list(raw_results)
     result.reports, result.calibration = _finalize(raw_results, calibration_config)
     return result
 
@@ -325,6 +335,7 @@ def grade_batch_with_fallback(
 
         # Success: this provider graded the whole cohort.
         result.errors = per_errors
+        result.raw_grades = list(raw_results)
         result.reports, result.calibration = _finalize(raw_results, calibration_config)
         result.provider_label = label
         result.fell_back_from = attempted
@@ -393,6 +404,28 @@ def summarize_samples_with_fallback(
         except Exception as exc:  # try the next provider
             last_error = exc
     raise RuntimeError(f"Sample summarisation failed on all providers: {last_error}")
+
+
+def recalibrate(
+    result: BatchResult,
+    calibration_config: CalibrationConfig | None = None,
+) -> BatchResult:
+    """Re-run Pass 2 (calibration) on an already-graded cohort — no LLM calls.
+
+    Lets the professor tweak the mean, caps or boundary settings and regenerate
+    grades for free, reusing the stored Pass-1 output. Returns a fresh
+    BatchResult carrying the same provider/audit metadata.
+    """
+    new = BatchResult(
+        errors=list(result.errors),
+        notes=list(result.notes),
+        provider_label=result.provider_label,
+        fell_back_from=list(result.fell_back_from),
+        raw_grades=list(result.raw_grades),
+    )
+    if new.raw_grades:
+        new.reports, new.calibration = _finalize(new.raw_grades, calibration_config)
+    return new
 
 
 def _clamp_total(total: float) -> float:

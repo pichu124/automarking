@@ -91,6 +91,29 @@ def test_health_failure_regrades_whole_cohort_with_next_provider():
     assert primary.graded == ["d0.txt", "d1.txt"]
 
 
+def test_recalibrate_reuses_grades_without_regrading():
+    import dataclasses
+    from src.config import DEFAULT_CALIBRATION
+    from src.grading_engine import recalibrate
+
+    graded = FakeGrader("primary", score=80)
+    specs = [ProviderSpec("primary", label="primary")]
+    docs = _docs(12)
+    result = grade_batch_with_fallback(
+        specs, _session(), docs, builder=_builder({"primary": graded})
+    )
+    assert len(result.raw_grades) == 12
+    n_graded_first = len(graded.graded)
+
+    # Re-calibrate with a different mean target — no further grade_report calls.
+    cfg = dataclasses.replace(DEFAULT_CALIBRATION, target_mean_low=61.5, target_mean_high=62.5)
+    recal = recalibrate(result, cfg)
+    assert len(graded.graded) == n_graded_first  # LLM not called again
+    assert len(recal.reports) == 12
+    assert recal.provider_label == "primary"
+    assert 61.0 <= recal.calibration.final_mean <= 63.0  # new mean applied
+
+
 def test_content_error_does_not_switch_provider():
     primary = FakeGrader("primary", content_err_on={"d2.txt"})
     secondary = FakeGrader("secondary")

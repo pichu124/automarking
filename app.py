@@ -15,6 +15,8 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
+import dataclasses
+
 from src import config
 from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 
@@ -29,6 +31,7 @@ from src.grading_engine import (
     GradingSession,
     ProviderSpec,
     grade_batch_with_fallback,
+    recalibrate,
     structure_rubric_with_fallback,
     summarize_samples_with_fallback,
 )
@@ -61,6 +64,20 @@ def _init_state() -> None:
 def _first_text(uploaded) -> str:
     docs = parse_upload(uploaded)
     return docs[0].text if docs else ""
+
+
+def _calibration_config():
+    """Build a CalibrationConfig from the sidebar controls (or the defaults)."""
+    mid = st.session_state.get("cal_mean", 65.5)
+    return dataclasses.replace(
+        DEFAULT_CALIBRATION,
+        target_mean_low=mid - 0.5,
+        target_mean_high=mid + 0.5,
+        hd_cap_fraction=st.session_state.get("cal_hd", 10) / 100.0,
+        di_cap_fraction=st.session_state.get("cal_di", 20) / 100.0,
+        avoid_band_boundaries=st.session_state.get("cal_avoid", True),
+        boundary_guard=st.session_state.get("cal_guard", 1.5),
+    )
 
 
 def _read_uploaded_once(uploaded, text_key: str, file_id_key: str) -> None:
@@ -249,12 +266,29 @@ def sidebar() -> None:
 
         st.divider()
         st.subheader("Calibration targets")
-        c = DEFAULT_CALIBRATION
-        st.caption(
-            f"Mean {c.target_mean_low:g}–{c.target_mean_high:g}% · "
-            f"HD ≤{c.hd_cap_fraction:.0%} · DI ≤{c.di_cap_fraction:.0%} · "
-            f"fails minimised (<{c.fail_threshold:g}%)"
+        st.session_state["cal_mean"] = st.slider(
+            "Target mean (%)", 55.0, 75.0, st.session_state.get("cal_mean", 65.5), 0.5
         )
+        st.session_state["cal_hd"] = st.slider(
+            "HD cap (%)", 0, 30, st.session_state.get("cal_hd", 10), 1,
+            help="Max % of the cohort scoring ≥ 80.",
+        )
+        st.session_state["cal_di"] = st.slider(
+            "Distinction cap (%)", 0, 40, st.session_state.get("cal_di", 20), 1,
+            help="Max % of the cohort scoring 70–79.",
+        )
+        st.session_state["cal_avoid"] = st.checkbox(
+            "Avoid boundary scores (59/69/79)",
+            value=st.session_state.get("cal_avoid", True),
+        )
+        if st.session_state["cal_avoid"]:
+            st.session_state["cal_guard"] = st.slider(
+                "Boundary buffer", 1.0, 3.0, st.session_state.get("cal_guard", 1.5), 0.5,
+                help="How far below each cut-off to push borderline scores "
+                     "(1.5 → top of Credit becomes 68.5).",
+            )
+        st.caption("Change these anytime, then use **🔄 Re-calibrate** on results "
+                   "to apply them for free (no tokens).")
 
         st.divider()
         if st.button("🆕 New Grading Session", use_container_width=True):
@@ -533,7 +567,8 @@ def grade_ui() -> None:
 
         try:
             result = grade_batch_with_fallback(
-                _provider_chain(), session, st.session_state["documents"], progress_callback=cb
+                _provider_chain(), session, st.session_state["documents"],
+                calibration_config=_calibration_config(), progress_callback=cb,
             )
             st.session_state["batch_result"] = result
         except Exception as exc:
@@ -567,6 +602,16 @@ def _render_results() -> None:
         with st.expander(f"⚠️ {len(result.errors)} report(s) failed", expanded=False):
             for err in result.errors:
                 st.write(err)
+
+    # Re-calibrate: apply new mean/cap/boundary settings for free (no LLM calls).
+    if result.raw_grades:
+        if st.button(
+            "🔄 Re-calibrate with current settings (no tokens)",
+            help="Re-runs only the calibration on the already-graded cohort using "
+                 "the sidebar Calibration targets. Free — the LLM is not called.",
+        ):
+            st.session_state["batch_result"] = recalibrate(result, _calibration_config())
+            st.rerun()
 
     calib = result.calibration
     if calib:
