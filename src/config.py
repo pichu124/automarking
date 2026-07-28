@@ -81,6 +81,16 @@ class CalibrationConfig:
     di_ceiling: float = 79.0        # ranks in the DI band cannot reach 80
     base_ceiling: float = 69.0      # ranks below the DI band cannot reach 70
 
+    # Boundary avoidance: keep final scores out of the frustrating "just below a
+    # band cut-off" zone (e.g. 59, 69, 79 — one mark short of the next band).
+    # Any score landing in [T - boundary_guard, T) for a band threshold T is
+    # pushed down to T - boundary_guard, so it sits clearly inside the lower band
+    # (e.g. a top-of-Credit report becomes 68.5, never the contestable 69).
+    # 50 is intentionally excluded — the score_floor already keeps scores >= 50.
+    avoid_band_boundaries: bool = True
+    boundary_guard: float = 1.5
+    credit_threshold: float = 60.0  # Pass/Credit band cut-off (for boundary guard)
+
 
 DEFAULT_CALIBRATION = CalibrationConfig()
 

@@ -80,6 +80,32 @@ def test_identical_scores():
     assert all(abs(s - 65.5) < 0.2 for s in final)
 
 
+def test_boundary_values_are_avoided():
+    # The frustrating "just below a band cut-off" scores (59, 69, 79) must not
+    # appear; nothing may sit in (T - guard, T) for T in {60, 70, 80}.
+    guard = CFG.boundary_guard
+    for seed in range(20):
+        random.seed(seed)
+        n = random.randint(5, 40)
+        raw = [max(0, min(100, random.gauss(75, 12))) for _ in range(n)]
+        final, _ = calibrate_scores(raw)
+        for f in final:
+            for threshold in (60.0, 70.0, 80.0):
+                assert not (threshold - guard + 0.01 < f < threshold), (
+                    f"score {f} sits in the guard zone below {threshold}"
+                )
+        _assert_constraints(raw, final, calibrate_scores(raw)[1])
+
+
+def test_boundary_cluster_pushed_below_seventy():
+    # The real case: many reports capped just under Distinction end up at the
+    # top of Credit — they must land at 68.5, never 69.
+    raw = [88.0 + (i % 4) * 0.2 for i in range(16)]
+    final, _ = calibrate_scores(raw)
+    assert all(f <= 68.5 or f >= 70.0 for f in final)
+    assert not any(69.0 <= f < 70.0 for f in final)
+
+
 def test_empty():
     final, report = calibrate_scores([])
     assert final == []

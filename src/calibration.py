@@ -107,8 +107,27 @@ def calibrate_scores(
 
     floor = cfg.score_floor
 
+    # Band cut-offs whose "just below" zone we keep scores out of. 50 is omitted
+    # because the score_floor already prevents scores below it.
+    boundary_thresholds = (cfg.credit_threshold, cfg.di_lower, cfg.hd_threshold)
+
+    def avoid_boundaries(s: float) -> float:
+        if not cfg.avoid_band_boundaries:
+            return s
+        g = cfg.boundary_guard
+        for threshold in boundary_thresholds:
+            if threshold - g <= s < threshold:
+                return threshold - g  # push down, clearly into the lower band
+        return s
+
     def scores_for_shift(t: float) -> List[float]:
-        return [_clamp(sorted_raw[p] + t, floor, ceil_by_rank[p]) for p in range(n)]
+        # avoid_boundaries is monotonic (only pushes down, never up across a
+        # threshold), so the ranking and the caps are preserved, and the cohort
+        # mean stays monotonic in t — the binary search below still converges.
+        return [
+            avoid_boundaries(_clamp(sorted_raw[p] + t, floor, ceil_by_rank[p]))
+            for p in range(n)
+        ]
 
     def mean_for(t: float) -> float:
         s = scores_for_shift(t)
