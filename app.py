@@ -23,7 +23,7 @@ from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 # Baseline caps captured before any runtime override (used as UI defaults).
 _BASE_REPORT_CAP = config.MAX_REPORT_CHARS
 _BASE_SAMPLE_CAP = config.MAX_SAMPLE_CHARS
-from src.docx_export import build_grade_document
+from src.docx_export import build_grade_document, sanitize_text
 from src.document_parser import ParsedDocument, parse_upload
 from src.estimator import compare_providers, estimate_batch, static_context_text
 from src.grading_engine import (
@@ -662,11 +662,11 @@ def _render_results() -> None:
         )
 
         for r in result.reports:
-            with st.expander(f"{r.student_identifier} — {r.final_total:g}/100 ({r.band})"):
+            with st.expander(f"{r.student_identifier} - {r.final_total:g}/100 ({r.band})"):
                 for c in r.components:
-                    st.markdown(f"**{c.name}** — {c.score:g}/{c.max_score:g}")
+                    st.markdown(f"**{sanitize_text(c.name)}** - {c.score:g}/{c.max_score:g}")
                     for note in c.notes:
-                        st.markdown(f"- {note}")
+                        st.text(sanitize_text(note))
 
 
 def main() -> None:

@@ -8,6 +8,8 @@ can see the calibrated distribution at a glance.
 from __future__ import annotations
 
 import io
+import re
+import unicodedata
 from typing import List, Optional
 
 from docx import Document
@@ -19,6 +21,43 @@ from .models import CalibratedReport
 
 
 _HEADER_FILL = "2E4057"
+
+
+# Typographic characters LLMs emit, mapped to plain keyboard equivalents.
+_CHAR_REPLACEMENTS = {
+    "–": "-", "—": "-", "−": "-", "‐": "-", "‑": "-",  # dashes/minus
+    "‘": "'", "’": "'", "‚": "'", "′": "'", "ʼ": "'",  # single quotes
+    "“": '"', "”": '"', "„": '"', "″": '"',                # double quotes
+    "…": "...",                                                            # ellipsis
+    "≈": "~", "≅": "~", "≃": "~", "∼": "~",                 # approximately
+    "≠": "!=", "≤": "<=", "≥": ">=",                             # comparisons
+    "±": "+/-", "×": "x", "÷": "/",                              # math
+    "→": "->", "←": "<-", "↔": "<->", "⇒": "=>",            # arrows
+    "•": "-", "·": "-", "‧": "-", "●": "-",                 # bullets/dots
+    " ": " ", " ": " ", " ": " ", " ": " ", "​": "",   # spaces
+    "°": " deg", "™": "(TM)", "®": "(R)", "©": "(C)",       # symbols
+    "€": "EUR", "£": "GBP", "¥": "JPY", "₫": "VND",         # currency
+}
+
+
+def sanitize_text(text: str) -> str:
+    """Return plain keyboard (ASCII) text.
+
+    Replaces smart quotes, dashes, arrows, the approximately sign, etc. with
+    keyboard equivalents; transliterates any accented letters to their base
+    form; drops anything else non-ASCII. Keeps the text readable with only
+    characters you can type.
+    """
+    if not text:
+        return text
+    for src, dst in _CHAR_REPLACEMENTS.items():
+        text = text.replace(src, dst)
+    # Accented letters -> base ASCII (e.g. "Pham" from "Phạm").
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    # Anything still non-ASCII becomes a space, then collapse runs of spaces.
+    text = "".join(c if ord(c) < 128 else " " for c in text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
 def build_grade_document(
@@ -102,19 +141,18 @@ def _add_student_section(doc: Document, report: CalibratedReport) -> None:
 
     for component in report.components:
         cells = table.add_row().cells
-        cells[0].text = component.name
+        cells[0].text = sanitize_text(component.name)
         cells[1].text = f"{component.score:g}"
         cells[2].text = f"{component.max_score:g}"
         notes_cell = cells[3]
-        notes = component.notes or ["—"]
-        # Reuse the cell's default (empty) paragraph for the first bullet so
-        # there's no blank line at the top of the cell.
+        notes = [sanitize_text(nt) for nt in (component.notes or ["-"])]
+        # Plain lines (no bullet glyph): reuse the cell's default paragraph for
+        # the first note so there is no blank line at the top of the cell.
         first = notes_cell.paragraphs[0]
         first.text = notes[0]
-        first.style = "List Bullet"
         first.paragraph_format.space_after = Pt(0)
         for note in notes[1:]:
-            p = notes_cell.add_paragraph(note, style="List Bullet")
+            p = notes_cell.add_paragraph(note)
             p.paragraph_format.space_after = Pt(0)
 
     # Total line
