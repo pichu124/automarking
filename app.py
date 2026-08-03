@@ -93,6 +93,30 @@ def _read_uploaded_once(uploaded, text_key: str, file_id_key: str) -> None:
         st.session_state[file_id_key] = uploaded.file_id
 
 
+def _read_uploads_once(uploads, text_key: str, ids_key: str) -> None:
+    """Multi-file variant: concatenate every uploaded file's text.
+
+    Re-reads only when the set of files changes (add/remove), so manual edits
+    in the text area survive Streamlit reruns. With more than one document the
+    pieces are labelled with their filename so the model can tell them apart.
+    """
+    if not uploads:
+        return
+    ids = tuple(u.file_id for u in uploads)
+    if st.session_state.get(ids_key) == ids:
+        return
+    docs = []
+    for up in uploads:
+        docs.extend(parse_upload(up))
+    if len(docs) <= 1:
+        st.session_state[text_key] = docs[0].text if docs else ""
+    else:
+        st.session_state[text_key] = "\n\n".join(
+            f"=== File: {d.name} ===\n{d.text.strip()}" for d in docs
+        )
+    st.session_state[ids_key] = ids
+
+
 def _provider_chain() -> list[ProviderSpec]:
     """Ordered provider list: the sidebar primary, then any enabled fallbacks.
 
@@ -312,10 +336,13 @@ def calibration_data_ui() -> None:
     col_task, col_rubric = st.columns(2)
     with col_task:
         st.subheader("📋 The Task")
-        task_file = st.file_uploader(
-            "Assignment requirements", type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key="task_up"
+        task_files = st.file_uploader(
+            "Assignment requirements (you can add several files)",
+            type=["pdf", "docx", "xlsx", "txt", "md", "csv"],
+            key="task_up",
+            accept_multiple_files=True,
         )
-        _read_uploaded_once(task_file, "task_text", "_task_file_id")
+        _read_uploads_once(task_files, "task_text", "_task_file_id")
         st.session_state["task_text"] = st.text_area(
             "Task text (you can also paste/edit here)",
             value=st.session_state["task_text"], height=180,
