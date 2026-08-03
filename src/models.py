@@ -43,8 +43,9 @@ class ComponentGrade(BaseModel):
     notes: List[str] = Field(
         description="1-3 feedback notes addressed to the student in second "
         "person, per the persona in the system prompt: complete sentences "
-        "citing specific content from their submission. A genuinely strong "
-        "component may need only one short approving note."
+        "citing specific content from their submission, kept as brief as the "
+        "point allows. A genuinely strong component may need only one short "
+        "approving note."
     )
 
 
