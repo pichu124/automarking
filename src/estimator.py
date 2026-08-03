@@ -27,8 +27,12 @@ def estimate_tokens(text: str) -> int:
 
 
 def _estimate_output_tokens(n_components: int) -> int:
-    """Structured grade JSON: identifier + per-component score & 2-3 notes."""
-    return 60 + max(1, n_components) * 45
+    """Structured grade JSON: identifier + per-component score & 1-3 notes.
+
+    Notes are professor-style full sentences (not fragments), so budget ~90
+    tokens per component.
+    """
+    return 60 + max(1, n_components) * 90
 
 
 @dataclass

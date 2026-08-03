@@ -41,7 +41,10 @@ class ComponentGrade(BaseModel):
     score: float = Field(description="Points awarded, between 0 and max_score.")
     max_score: float = Field(description="Maximum points for this component.")
     notes: List[str] = Field(
-        description="2-3 punchy, technical bullet points. No fluff."
+        description="1-3 feedback notes addressed to the student in second "
+        "person, per the persona in the system prompt: complete sentences "
+        "citing specific content from their submission. A genuinely strong "
+        "component may need only one short approving note."
     )
 
 

@@ -29,9 +29,19 @@ def test_system_text_bounds_each_sample():
     # Each capped piece must be far below the raw 25k it was handed.
     assert text.count("truncated") >= 5  # task + rubric + 4 samples
     # Sanity: overall context is bounded well under the uncapped ~150k chars.
+    # Measure the fixed scaffolding (persona + headings + JSON instruction)
+    # with empty inputs, so the bound survives prompt-wording changes.
+    overhead = len(
+        build_grading_system_text(
+            task_text="",
+            rubric_text="",
+            components=[RubricComponent(name="C", weight=100, description="")],
+            reference_samples={},
+        )
+    )
     assert len(text) < (
         config.MAX_TASK_CHARS + config.MAX_RUBRIC_CHARS
-        + 4 * config.MAX_SAMPLE_CHARS + 5000
+        + 4 * config.MAX_SAMPLE_CHARS + overhead + 1000
     )
 
 

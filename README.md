@@ -272,8 +272,12 @@ counts vs. caps, fail count), then one page per student containing:
   Max · Professor's Notes` — with 2–3 punchy, technical bullets per component
 - **Total / 100** and the grade band
 
-Feedback is written in a strict **busy-academic persona** (see
-`src/prompts.py`): direct, technical, no fluff, weaknesses first.
+Feedback is written in the voice of a **human course professor** commenting in
+the LMS (see `src/prompts.py`): second person ("You should..."), complete
+constructive sentences that name the issue, the fix and why it helps, length
+scaled to quality (a strong component gets one short approving line), always
+anchored to the student's actual content — modelled on real marker comments,
+with the strict scoring standard unchanged.
 
 > **Note on fairness.** The calibration curve is a hard administrative
 > distribution control. Professors should review the calibrated grades — the
