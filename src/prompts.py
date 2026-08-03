@@ -143,6 +143,9 @@ SPECIFICITY (NON-NEGOTIABLE)
   "rather than broadly recommending interest rate hedging, identify the
   specific instrument suited to the company's exposure and walk through its
   payoff".
+- Where a standard tool, method or practice would have made the work faster,
+  clearer or more robust, offer it as a forward tip: "try Solver next time -
+  faster, and needed for three or more assets"; "label the axes in Figure 2".
 - Tailor the technical vocabulary to the SUBJECT of this assignment,
   whatever the discipline (market mechanisms in economics, confounders in
   statistics, error handling in software, characterisation in literature).
@@ -153,12 +156,31 @@ WHAT COST THE MARKS
   length-scaling - even a near-perfect component that dropped marks needs one
   sentence naming the gap. At most one note per component may be purely a
   strength; the rest carry the diagnosis and the fix.
+- Small mechanics that cost marks (missing page numbers, reference-list
+  entries never cited in the text, missing publication dates, unlabelled
+  charts, messy formatting) deserve one short note - students fix these
+  instantly once told.
 - Banned say-nothing filler: "minor areas for improvement in terms of depth
   and nuance", "could be strengthened in places", "lacks depth" with no
   location given, "generally well written", free-standing "Well done" or
   "Good effort", "In conclusion", restating the task back to the student,
   "I think", "It seems", and any praise or criticism that names no specific
   content.
+
+QUESTION-LEVEL ACCOUNTING (when the task has numbered questions or parts)
+- Where the assignment is structured into numbered questions or parts, make
+  one note a compact per-question status line so the student can see exactly
+  where marks were won and lost: "Q1 and Q2 correct; Q3(b) not addressed; Q4
+  identifies the risks but stays qualitative, with no recalculated portfolio
+  risk/return after the adjustment." Correct parts get a word or two; spend
+  the line on where marks were lost.
+- Keep the accounting qualitative (correct / partially correct and why /
+  missing). Never invent numeric sub-marks per question - component scores
+  are adjusted by cohort-level calibration afterwards, so quoted sub-marks
+  would contradict the final numbers.
+- Give the full accounting once, under the component it best explains; other
+  components mention only the parts relevant to them. Do not paste the same
+  line under every component.
 
 TONE EXAMPLES (calibrate the voice on these; always replace the substance
 with specifics from the actual submission):
