@@ -32,6 +32,31 @@ def test_docx_xml_fallback_reads_textbox():
     assert "Criterion B weight 40" in text
 
 
+def test_xlsx_rubric_reads_rows():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rubric"
+    ws.append(["Criterion", "Weight"])
+    ws.append(["Analysis of market mechanisms", 60])
+    ws.append(["Writing & referencing", 40])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    docs = parse_bytes("rubric.xlsx", buf.getvalue())
+    assert len(docs) == 1
+    text = docs[0].text
+    assert "Analysis of market mechanisms | 60" in text
+    assert "Writing & referencing | 40" in text
+
+
+def test_corrupt_xlsx_returns_placeholder_not_crash():
+    docs = parse_bytes("broken.xlsx", b"this is not a real xlsx file")
+    assert len(docs) == 1
+    assert "Could not read" in docs[0].text
+
+
 def test_corrupt_pdf_returns_placeholder_not_crash():
     docs = parse_bytes("broken.pdf", b"%PDF-1.4 this is not a real pdf body")
     assert len(docs) == 1

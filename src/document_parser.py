@@ -91,6 +91,35 @@ def _read_text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _read_xlsx(data: bytes) -> str:
+    """Extract text from an Excel workbook, one row per line, sheets labelled.
+
+    Rubrics and grade sheets often live in Excel. ``data_only=True`` returns
+    computed cell values instead of formula strings.
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - import guard
+        raise RuntimeError(
+            "The 'openpyxl' package is required to read Excel files. "
+            "Install it with: pip install openpyxl"
+        ) from exc
+
+    workbook = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    parts: List[str] = []
+    try:
+        for sheet in workbook.worksheets:
+            if len(workbook.worksheets) > 1:
+                parts.append(f"=== Sheet: {sheet.title} ===")
+            for row in sheet.iter_rows(values_only=True):
+                cells = ["" if v is None else str(v).strip() for v in row]
+                if any(cells):
+                    parts.append(" | ".join(cells).rstrip(" |"))
+    finally:
+        workbook.close()
+    return "\n".join(parts)
+
+
 def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     """Parse one uploaded file. A .zip expands to multiple ParsedDocuments."""
     lowered = name.lower()
@@ -102,6 +131,8 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
             text = _read_docx(data)
         elif lowered.endswith(".pdf"):
             text = _read_pdf(data)
+        elif lowered.endswith((".xlsx", ".xlsm")):
+            text = _read_xlsx(data)
         elif lowered.endswith(_TEXT_EXTS):
             text = _read_text(data)
         else:

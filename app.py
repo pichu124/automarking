@@ -313,7 +313,7 @@ def calibration_data_ui() -> None:
     with col_task:
         st.subheader("📋 The Task")
         task_file = st.file_uploader(
-            "Assignment requirements", type=["pdf", "docx", "txt", "md"], key="task_up"
+            "Assignment requirements", type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key="task_up"
         )
         _read_uploaded_once(task_file, "task_text", "_task_file_id")
         st.session_state["task_text"] = st.text_area(
@@ -324,7 +324,7 @@ def calibration_data_ui() -> None:
     with col_rubric:
         st.subheader("📐 The Rubric")
         rubric_file = st.file_uploader(
-            "Grading criteria & weightings", type=["pdf", "docx", "txt", "md"], key="rubric_up"
+            "Grading criteria & weightings", type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key="rubric_up"
         )
         _read_uploaded_once(rubric_file, "rubric_text", "_rubric_file_id")
         if rubric_file is not None and not st.session_state["rubric_text"].strip():
@@ -342,7 +342,7 @@ def calibration_data_ui() -> None:
     samples = st.session_state["reference_samples"]
     for (key, label), col in zip(REFERENCE_KEYS, cols):
         with col:
-            up = st.file_uploader(label, type=["pdf", "docx", "txt", "md"], key=f"ref_{key}")
+            up = st.file_uploader(label, type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key=f"ref_{key}")
             if up:
                 samples[key] = _first_text(up)
             status = "✅ loaded" if samples.get(key) else "— empty"
@@ -429,7 +429,7 @@ def batch_ui() -> None:
     st.header("2 · Batch Upload — Student Reports")
     uploads = st.file_uploader(
         "Drop all reports (PDF/DOCX/TXT) or a single .zip",
-        type=["pdf", "docx", "txt", "md", "zip"],
+        type=["pdf", "docx", "xlsx", "txt", "md", "csv", "zip"],
         accept_multiple_files=True,
         key="batch_up",
     )
