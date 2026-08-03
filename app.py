@@ -152,9 +152,27 @@ def _provider_chain() -> list[ProviderSpec]:
 
 # --- UI sections -----------------------------------------------------------
 
+@st.cache_resource
+def _app_version() -> str:
+    """Short git commit of the running code — so you can tell at a glance
+    whether a `git pull` has actually taken effect (requires a full app
+    restart, not just a browser Rerun)."""
+    try:
+        import subprocess
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def sidebar() -> None:
     with st.sidebar:
         st.header("⚙️ Provider")
+        st.caption(f"App version: `{_app_version()}` — after `git pull`, stop the "
+                   "app (Ctrl+C) and run it again for changes to load.")
 
         keys = list(PROVIDER_PRESETS.keys())
 

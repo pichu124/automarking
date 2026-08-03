@@ -350,5 +350,10 @@ def build_grading_user_message(source_name: str, report_text: str) -> str:
         f"Grade the following student report. Source filename: {source_name}\n\n"
         "=== STUDENT REPORT START ===\n"
         f"{cap_text(report_text, config.MAX_REPORT_CHARS)}\n"
-        "=== STUDENT REPORT END ==="
+        "=== STUDENT REPORT END ===\n\n"
+        "Reminder: if the task is structured into numbered questions or parts, "
+        "exactly one of your notes (under the component it best explains) must "
+        "be the compact per-question status line - e.g. \"Q1 and Q2 correct; "
+        "Q3(b) not addressed; Q4 stays qualitative\" - qualitative only, no "
+        "numeric sub-marks, and name any part the submission skipped."
     )
