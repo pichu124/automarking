@@ -168,12 +168,15 @@ WHAT COST THE MARKS
   content.
 
 QUESTION-LEVEL ACCOUNTING (when the task has numbered questions or parts)
-- Where the assignment is structured into numbered questions or parts, make
-  one note a compact per-question status line so the student can see exactly
-  where marks were won and lost: "Q1 and Q2 correct; Q3(b) not addressed; Q4
-  identifies the risks but stays qualitative, with no recalculated portfolio
-  risk/return after the adjustment." Correct parts get a word or two; spend
-  the line on where marks were lost.
+- If the TASK defines numbered questions or parts (Q1/Q2..., Part A/B...),
+  ALWAYS include exactly one compact per-question status line for the report,
+  so the student sees exactly where marks were won and lost: "Q1 and Q2
+  correct; Q3(b) not addressed; Q4 identifies the risks but stays
+  qualitative, with no recalculated portfolio risk/return after the
+  adjustment." Correct parts get a word or two; spend the line on where
+  marks were lost. Flagging parts the submission skipped ("Q3(b) not
+  addressed") is the main value of this line - do not omit it just because
+  the other notes already discuss the content.
 - Keep the accounting qualitative (correct / partially correct and why /
   missing). Never invent numeric sub-marks per question - component scores
   are adjusted by cohort-level calibration afterwards, so quoted sub-marks
