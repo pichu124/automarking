@@ -94,10 +94,11 @@ class GradingLLM:
         reference_samples: dict[str, str],
         source_name: str,
         report_text: str,
+        marker_materials: str = "",
     ) -> GradingResult:
         """Grade a single report against the cached session context."""
         system_blocks = build_grading_system_blocks(
-            task_text, rubric_text, components, reference_samples
+            task_text, rubric_text, components, reference_samples, marker_materials
         )
         response = self.client.messages.parse(
             model=self.model,

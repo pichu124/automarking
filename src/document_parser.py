@@ -165,3 +165,61 @@ def _parse_zip(data: bytes) -> List[ParsedDocument]:
 def parse_upload(uploaded_file) -> List[ParsedDocument]:
     """Parse a Streamlit UploadedFile (or anything with .name and .getvalue())."""
     return parse_bytes(uploaded_file.name, uploaded_file.getvalue())
+
+
+# --- Grouping files into per-student submissions ---------------------------
+# A submission often spans several files (a Word report + an Excel workbook).
+# Group by student ID in the filename (e.g. s4180007); files without an ID
+# group by their normalised filename stem, so "X.docx" pairs with "X.xlsx".
+
+_STUDENT_ID_RE = re.compile(r"[sS](\d{6,8})")
+
+
+def _group_key(name: str) -> tuple:
+    base = name.rsplit("/", 1)[-1]
+    match = _STUDENT_ID_RE.search(base)
+    if match:
+        return ("id", match.group(1))
+    stem = base.rsplit(".", 1)[0].lower()
+    stem = re.sub(r"\s*\(\d+\)\s*$", "", stem)      # drop copy suffixes " (1)"
+    stem = re.sub(r"[^a-z0-9]+", "", stem)           # normalise punctuation
+    return ("stem", stem or base.lower())
+
+
+def group_by_student(
+    docs: List[ParsedDocument], enabled: bool = True
+) -> List[ParsedDocument]:
+    """Merge files that belong to the same student into one submission.
+
+    The primary (Word/PDF) file's name labels the group and its text comes
+    first, so if a length cap ever trims the combined text it is the auxiliary
+    spreadsheets that get shortened, not the write-up.
+    """
+    if not enabled:
+        return list(docs)
+    groups: dict = {}
+    order: List[tuple] = []
+    for doc in docs:
+        key = _group_key(doc.name)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(doc)
+
+    merged: List[ParsedDocument] = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            merged.append(members[0])
+            continue
+        primary = next(
+            (m for m in members if m.name.lower().endswith((".docx", ".pdf"))),
+            members[0],
+        )
+        ordered = [primary] + [m for m in members if m is not primary]
+        text = "\n\n".join(
+            f"=== File: {m.name} ===\n{m.text.strip()}" for m in ordered
+        )
+        label = f"{primary.name} [+{len(members) - 1} file(s)]"
+        merged.append(ParsedDocument(label, text))
+    return merged

@@ -62,6 +62,7 @@ class Grader(Protocol):
         reference_samples: dict,
         source_name: str,
         report_text: str,
+        marker_materials: str = "",
     ) -> GradingResult: ...
 
     def complete_text(self, system: str, user: str, max_tokens: int = ...) -> str: ...
@@ -93,6 +94,8 @@ class GradingSession:
     components: List[RubricComponent]
     reference_samples: dict[str, str]  # keys: HD, DI, AVG, PASS
     name: str = "Untitled session"
+    # Answer key + marking notes, visible to the model but never to students.
+    marker_materials: str = ""
 
 
 @dataclass
@@ -186,6 +189,7 @@ def _grade_pass1(
                 reference_samples=session.reference_samples,
                 source_name=doc.name,
                 report_text=doc.text,
+                marker_materials=session.marker_materials,
             )
             raw_results.append((doc.name, graded))
         except Exception as exc:

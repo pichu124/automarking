@@ -39,6 +39,9 @@ MAX_TASK_CHARS = 16000         # ≈ 4k tokens
 MAX_RUBRIC_CHARS = 16000       # ≈ 4k tokens
 MAX_SAMPLE_CHARS = 24000       # per reference sample, ≈ 6k tokens (~3,700 words)
 MAX_REPORT_CHARS = 40000       # per student report, ≈ 10k tokens (~6,000 words)
+# Marker-only materials (answer key + marking notes). Static per session, so it
+# sits in the cached prefix — generous cap is cheap after the first request.
+MAX_MARKER_CHARS = 80000       # ≈ 20k tokens
 
 # When compressing a reference sample into a compact "anchor profile", how much
 # of the sample to read in one summarisation call (one sample at a time, so this

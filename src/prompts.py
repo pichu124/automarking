@@ -227,11 +227,33 @@ def _format_components(components: List[RubricComponent]) -> str:
     return "\n".join(lines)
 
 
+MARKER_MATERIALS_FRAMING = """\
+# MARKER-ONLY MATERIALS (answer key / marking guidance) - STRICTLY CONFIDENTIAL
+The materials below are for YOU, the marker, only. Use them as follows:
+- Verify the student's numerical work against the official solutions. Apply
+  error-carried-forward: if an early input is wrong but later steps apply
+  correct method to it, penalise the error ONCE at its source, not again in
+  the steps that reuse it.
+- Small differences from rounding or data vintage are acceptable; flag only
+  meaningful discrepancies. In your notes, say WHERE the calculation went
+  wrong (the step, the input, the formula) - never state the official correct
+  value.
+- Follow any marking instructions found in these materials (what to reward,
+  wording rules for feedback, things not to mention to students). They
+  override your default habits where they conflict.
+- NEVER echo, quote or hint at the contents of these materials in the
+  student-facing notes: no solution values, no internal targets or ratios,
+  no marker-only rules. If a rule says not to name a concept to students,
+  use an indirect prompt instead.
+"""
+
+
 def _build_session_context(
     task_text: str,
     rubric_text: str,
     components: List[RubricComponent],
     reference_samples: dict[str, str],
+    marker_materials: str = "",
 ) -> str:
     sample_labels = {
         "HD": "HIGH DISTINCTION reference sample",
@@ -246,7 +268,7 @@ def _build_session_context(
             sample_text_parts.append(f"=== {label} ===\n{body}")
     samples_block = "\n\n".join(sample_text_parts) if sample_text_parts else "(none provided)"
 
-    return (
+    context = (
         "# THE TASK (assignment requirements)\n"
         f"{cap_text(task_text, config.MAX_TASK_CHARS)}\n\n"
         "# THE RUBRIC (grade strictly against these components)\n"
@@ -256,6 +278,13 @@ def _build_session_context(
         "# REFERENCE SAMPLES (your calibration anchors)\n"
         f"{samples_block}"
     )
+    marker = (marker_materials or "").strip()
+    if marker:
+        context += (
+            "\n\n" + MARKER_MATERIALS_FRAMING + "\n"
+            + cap_text(marker, config.MAX_MARKER_CHARS)
+        )
+    return context
 
 
 # --- JSON-output instructions for non-Anthropic providers ------------------
@@ -290,17 +319,18 @@ def build_grading_system_blocks(
     rubric_text: str,
     components: List[RubricComponent],
     reference_samples: dict[str, str],
+    marker_materials: str = "",
 ) -> list[dict]:
     """Build the cacheable system blocks for native Claude grading.
 
     Block 1: the static persona (caches across all sessions).
-    Block 2: this session's task + rubric + reference samples, with a
-             `cache_control` breakpoint so it caches across every student in
-             the batch. Volatile per-student content goes in the user message,
-             never here.
+    Block 2: this session's task + rubric + reference samples + marker-only
+             materials, with a `cache_control` breakpoint so it caches across
+             every student in the batch. Volatile per-student content goes in
+             the user message, never here.
     """
     session_context = _build_session_context(
-        task_text, rubric_text, components, reference_samples
+        task_text, rubric_text, components, reference_samples, marker_materials
     )
     return [
         {"type": "text", "text": GRADING_SYSTEM_PROMPT},
@@ -317,10 +347,11 @@ def build_grading_system_text(
     rubric_text: str,
     components: List[RubricComponent],
     reference_samples: dict[str, str],
+    marker_materials: str = "",
 ) -> str:
     """Single system string for OpenAI-compatible providers (no caching)."""
     session_context = _build_session_context(
-        task_text, rubric_text, components, reference_samples
+        task_text, rubric_text, components, reference_samples, marker_materials
     )
     return (
         f"{GRADING_SYSTEM_PROMPT}\n\n{session_context}\n\n"

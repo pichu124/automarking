@@ -88,6 +88,26 @@ back to raw samples. Big-context models (Claude/Gemini) can skip it and read ful
 samples directly. Logic: `summarize_samples_with_fallback` in
 `src/grading_engine.py`.
 
+### Per-student file grouping & marker-only materials
+
+**Grouping (Word + Excel = one submission).** Real submissions often span a
+Word report plus an Excel workbook. The batch uploader groups files by the
+student ID in the filename (e.g. `s4180007`); files without an ID pair up when
+their names match apart from the extension. The Word/PDF file labels the group
+and its text comes first (so caps trim spreadsheets, not the write-up). A
+checkbox disables grouping, and a review panel shows exactly which files formed
+each submission before you grade.
+
+**Marker-only materials (answer key + marking notes).** An optional upload in
+section 1 feeds the official solutions and marker guidance to the model —
+never to students. The model verifies numerical work against the key with
+error-carried-forward (an error is penalised once at its source, not in later
+steps that reuse it), tolerates rounding/data-vintage differences, follows any
+marking instructions found in the materials (including concepts not to name in
+feedback), and is forbidden from quoting solution values or internal targets
+in its notes. The materials sit in the cached prefix, so on Claude they are
+billed once per batch.
+
 ### Context size & free-tier limits
 
 Each grading request bundles the task, rubric, four reference samples and one

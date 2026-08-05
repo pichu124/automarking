@@ -141,6 +141,7 @@ def static_context_text(session) -> str:
         session.rubric_text,
         session.components,
         session.reference_samples,
+        getattr(session, "marker_materials", ""),
     )
 
 

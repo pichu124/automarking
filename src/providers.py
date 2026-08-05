@@ -263,9 +263,10 @@ class OpenAICompatibleProvider:
         reference_samples: dict[str, str],
         source_name: str,
         report_text: str,
+        marker_materials: str = "",
     ) -> GradingResult:
         system = build_grading_system_text(
-            task_text, rubric_text, components, reference_samples
+            task_text, rubric_text, components, reference_samples, marker_materials
         )
         user = build_grading_user_message(source_name, report_text)
         data = self._chat_json(system, user, self.max_tokens_grade)

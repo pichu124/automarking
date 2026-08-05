@@ -24,7 +24,7 @@ from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 _BASE_REPORT_CAP = config.MAX_REPORT_CHARS
 _BASE_SAMPLE_CAP = config.MAX_SAMPLE_CHARS
 from src.docx_export import build_grade_document, sanitize_text
-from src.document_parser import ParsedDocument, parse_upload
+from src.document_parser import ParsedDocument, group_by_student, parse_upload
 from src.estimator import compare_providers, estimate_batch, static_context_text
 from src.grading_engine import (
     SAMPLE_LEVELS,
@@ -59,6 +59,7 @@ def _init_state() -> None:
     st.session_state.setdefault("components", None)
     st.session_state.setdefault("documents", [])
     st.session_state.setdefault("batch_result", None)
+    st.session_state.setdefault("marker_text", "")
 
 
 def _first_text(uploaded) -> str:
@@ -337,6 +338,8 @@ def sidebar() -> None:
             for key in (
                 "session_name", "task_text", "rubric_text",
                 "reference_samples", "components", "documents", "batch_result",
+                "marker_text", "sample_profiles", "use_profiles",
+                "_task_file_id", "_rubric_file_id", "_marker_file_id",
             ):
                 st.session_state.pop(key, None)
             _init_state()
@@ -393,6 +396,30 @@ def calibration_data_ui() -> None:
             status = "✅ loaded" if samples.get(key) else "— empty"
             st.caption(status)
     st.session_state["reference_samples"] = samples
+
+    st.subheader("🔑 Marker-only materials (optional)")
+    st.caption(
+        "Answer key and/or marking notes — visible to the model, **never shown "
+        "to students**. The model verifies numerical work against the key "
+        "(errors penalised once at their source), follows any marking "
+        "instructions (e.g. concepts not to name in feedback), and will not "
+        "quote solution values or internal targets in its notes."
+    )
+    marker_files = st.file_uploader(
+        "Answer key / marking notes (you can add several files)",
+        type=["pdf", "docx", "xlsx", "txt", "md", "csv"],
+        key="marker_up",
+        accept_multiple_files=True,
+    )
+    _read_uploads_once(marker_files, "marker_text", "_marker_file_id")
+    if st.session_state["marker_text"].strip():
+        st.caption(
+            f"✅ Loaded ~{len(st.session_state['marker_text']):,} characters "
+            f"(≈ {len(st.session_state['marker_text']) // 4:,} tokens, cached "
+            "across the whole batch on Claude)."
+        )
+        with st.expander("Preview marker materials (as the model will see them)"):
+            st.text(st.session_state["marker_text"][:5000])
 
     if st.button("🔍 Structure rubric into components", type="primary"):
         if not st.session_state["rubric_text"].strip():
@@ -473,20 +500,38 @@ def _sample_compression_ui() -> None:
 def batch_ui() -> None:
     st.header("2 · Batch Upload — Student Reports")
     uploads = st.file_uploader(
-        "Drop all reports (PDF/DOCX/TXT) or a single .zip",
+        "Drop all reports (PDF/DOCX/XLSX/TXT) or a single .zip — a student's "
+        "Word report and Excel workbook can be uploaded together",
         type=["pdf", "docx", "xlsx", "txt", "md", "csv", "zip"],
         accept_multiple_files=True,
         key="batch_up",
     )
+    group_enabled = st.checkbox(
+        "Group files by student (Word + Excel of the same student become ONE submission)",
+        value=st.session_state.get("group_by_student", True),
+        help="Files are grouped by the student ID in the filename (e.g. "
+             "s4180007); files without an ID pair up when their names match "
+             "apart from the extension. Verify the grouping below before "
+             "grading.",
+    )
+    st.session_state["group_by_student"] = group_enabled
     if uploads:
-        docs: list[ParsedDocument] = []
+        raw_docs: list[ParsedDocument] = []
         for up in uploads:
-            docs.extend(parse_upload(up))
-        st.session_state["documents"] = docs
+            raw_docs.extend(parse_upload(up))
+        st.session_state["documents"] = group_by_student(raw_docs, enabled=group_enabled)
+        st.session_state["_raw_file_count"] = len(raw_docs)
     docs = st.session_state["documents"]
     if docs:
-        st.info(f"{len(docs)} report(s) ready: " + ", ".join(d.name for d in docs[:8])
-                + (" …" if len(docs) > 8 else ""))
+        raw_n = st.session_state.get("_raw_file_count", len(docs))
+        if raw_n != len(docs):
+            st.info(f"{len(docs)} submission(s) from {raw_n} files.")
+        else:
+            st.info(f"{len(docs)} submission(s) ready.")
+        with st.expander("Review submissions / grouping", expanded=raw_n != len(docs)):
+            for d in docs:
+                n_files = d.text.count("=== File: ") or 1
+                st.write(f"• **{d.name}** — {n_files} file(s), ~{len(d.text):,} chars")
 
 
 def _effective_samples() -> dict:
@@ -503,6 +548,7 @@ def _session_from_state() -> GradingSession:
         components=st.session_state["components"],
         reference_samples=_effective_samples(),
         name=st.session_state["session_name"] or "Untitled session",
+        marker_materials=st.session_state.get("marker_text", ""),
     )
 
 
