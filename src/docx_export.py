@@ -14,7 +14,9 @@ from typing import List, Optional
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt, RGBColor
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt, RGBColor
 
 from .calibration import CalibrationReport
 from .models import CalibratedReport
@@ -123,6 +125,28 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
         doc.add_paragraph()
 
 
+# Column widths for the student table (A4 portrait, ~16cm usable). Narrow
+# Component/Score/Max so Professor's Notes gets most of the page.
+_STUDENT_COL_WIDTHS = (Cm(3.8), Cm(1.3), Cm(1.2), Cm(9.6))
+
+
+def _set_fixed_widths(table, widths) -> None:
+    """Force fixed column widths (Word ignores plain column widths unless the
+    table layout is fixed and every cell in the column carries the width)."""
+    table.autofit = False
+    tbl_pr = table._tbl.tblPr
+    layout = tbl_pr.find(qn("w:tblLayout"))
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        tbl_pr.append(layout)
+    layout.set(qn("w:type"), "fixed")
+    for column, width in zip(table.columns, widths):
+        column.width = width
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            cell.width = width
+
+
 def _add_student_section(doc: Document, report: CalibratedReport) -> None:
     heading = doc.add_heading(report.student_identifier, level=1)
     heading.runs[0].font.color.rgb = RGBColor.from_string(_HEADER_FILL)
@@ -154,6 +178,9 @@ def _add_student_section(doc: Document, report: CalibratedReport) -> None:
         for note in notes[1:]:
             p = notes_cell.add_paragraph(note)
             p.paragraph_format.space_after = Pt(0)
+
+    # Apply after all rows exist — every cell must carry the column width.
+    _set_fixed_widths(table, _STUDENT_COL_WIDTHS)
 
     # Total line
     total_p = doc.add_paragraph()
