@@ -32,6 +32,45 @@ def test_docx_xml_fallback_reads_textbox():
     assert "Criterion B weight 40" in text
 
 
+_PNG_1PX = __import__("base64").b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def _docx_with_images(n_images: int) -> bytes:
+    import docx as docx_lib
+
+    d = docx_lib.Document()
+    d.add_paragraph("Appendix B")
+    for _ in range(n_images):
+        d.add_picture(io.BytesIO(_PNG_1PX))
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def test_docx_embedded_images_are_annotated():
+    # Note: python-docx stores identical images once, so count distinct media.
+    docs = parse_bytes("report.docx", _docx_with_images(3))
+    text = docs[0].text
+    assert "contains 1 embedded image(s)" in text
+    assert "could not be verified from the text" in text
+    # The note leads the text so it survives tail truncation.
+    assert text.index("embedded image") < text.index("Appendix B")
+
+
+def test_docx_without_images_has_no_note():
+    docs = parse_bytes("report.docx", _docx_with_images(0))
+    assert "embedded image" not in docs[0].text
+
+
+def test_persona_forbids_calling_images_absent():
+    from src.prompts import GRADING_SYSTEM_PROMPT
+
+    assert "NEVER state that screenshots" in GRADING_SYSTEM_PROMPT
+    assert "could not be verified from the text" in GRADING_SYSTEM_PROMPT
+
+
 def test_xlsx_rubric_reads_rows():
     from openpyxl import Workbook
 

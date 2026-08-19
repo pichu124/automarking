@@ -120,6 +120,53 @@ def _read_xlsx(data: bytes) -> str:
     return "\n".join(parts)
 
 
+# Embedded images (screenshots, charts) cannot be text-extracted. Count them
+# and prepend a note so the grader never mistakes invisible-for-absent — a
+# student's appendix full of rate screenshots must not be called "empty".
+_IMAGE_EXTS = (
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif",
+    ".emf", ".wmf", ".webp",
+)
+
+
+def _count_docx_images(data: bytes) -> int:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            return sum(
+                1 for n in zf.namelist()
+                if n.startswith("word/media/") and n.lower().endswith(_IMAGE_EXTS)
+            )
+    except Exception:
+        return 0
+
+
+def _count_pdf_images(data: bytes) -> int:
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        total = 0
+        for page in reader.pages:
+            try:
+                total += sum(1 for _ in page.images)
+            except Exception:
+                continue
+        return total
+    except Exception:
+        return 0
+
+
+def _image_note(count: int) -> str:
+    if count <= 0:
+        return ""
+    return (
+        f"[NOTE: this document contains {count} embedded image(s) - e.g. "
+        "screenshots, charts, figures - whose content cannot be extracted as "
+        "text here. Do NOT state that screenshots, figures or appendix "
+        "evidence are missing or absent; they may be in these images. If "
+        "required evidence is not visible in the text, say it could not be "
+        "verified from the text and grade what is verifiable.]\n\n"
+    )
+
+
 def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     """Parse one uploaded file. A .zip expands to multiple ParsedDocuments."""
     lowered = name.lower()
@@ -128,9 +175,9 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     # A single unreadable file must never crash the app — surface a placeholder.
     try:
         if lowered.endswith(".docx"):
-            text = _read_docx(data)
+            text = _image_note(_count_docx_images(data)) + _read_docx(data)
         elif lowered.endswith(".pdf"):
-            text = _read_pdf(data)
+            text = _image_note(_count_pdf_images(data)) + _read_pdf(data)
         elif lowered.endswith((".xlsx", ".xlsm")):
             text = _read_xlsx(data)
         elif lowered.endswith(_TEXT_EXTS):

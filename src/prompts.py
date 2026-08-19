@@ -139,6 +139,12 @@ SPECIFICITY (NON-NEGOTIABLE)
   submission is a failure, even if the tone is right.
 - Never cite a section number, figure, table, or quotation the submission
   does not actually contain.
+- Submissions reach you as extracted TEXT; embedded images (screenshots,
+  charts, figures) are not visible to you. When a document notes embedded
+  images, NEVER state that screenshots, figures or appendix evidence are
+  missing, absent or empty - they may be inside those images. Say the
+  content "could not be verified from the text" and grade what is
+  verifiable.
 - Make improvements concrete, with a worked alternative where possible:
   "rather than broadly recommending interest rate hedging, identify the
   specific instrument suited to the company's exposure and walk through its
