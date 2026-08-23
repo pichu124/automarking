@@ -18,7 +18,7 @@ exports a structured **Microsoft Word** grade report.
 | UI | **Streamlit** | Fast to build, native file-upload + download widgets |
 | LLM | **Pluggable** — Claude, Gemini, Groq, Ollama, OpenAI, … | Pick by cost/quality; see Providers below |
 | Structured output | Claude: `messages.parse` + Pydantic. Others: JSON mode + robust parse | Validated objects, never brittle text parsing |
-| Doc parsing | `python-docx`, `pypdf`, `openpyxl`, `zipfile` | DOCX / PDF / XLSX / TXT / CSV / ZIP ingestion |
+| Doc parsing | `python-docx`, `pypdf`, `openpyxl`, `pyxlsb`, `xlrd`, `zipfile` | DOCX / PDF / XLSX / XLSM / XLSB / XLS / TXT / CSV / ZIP + standalone images ingestion |
 | Export | `python-docx` | The rubric-shaped `.docx` deliverable |
 | Calibration | Pure-Python, unit-tested | Deterministic, auditable, no LLM in the loop |
 
@@ -241,7 +241,7 @@ automarking/
 ├── src/
 │   ├── config.py           # Model + calibration targets
 │   ├── models.py           # Pydantic schemas (LLM contract + internal types)
-│   ├── document_parser.py  # DOCX / PDF / XLSX / TXT / CSV / ZIP → text
+│   ├── document_parser.py  # DOCX/PDF/XLSX/XLSB/XLS/TXT/CSV/ZIP/images → text
 │   ├── prompts.py          # The Master grading prompt + context builders
 │   ├── llm_client.py       # Anthropic SDK wrapper (parse + caching + thinking)
 │   ├── providers.py        # Provider registry + OpenAI-compatible adapter

@@ -359,7 +359,7 @@ def calibration_data_ui() -> None:
         st.subheader("📋 The Task")
         task_files = st.file_uploader(
             "Assignment requirements (you can add several files)",
-            type=["pdf", "docx", "xlsx", "txt", "md", "csv"],
+            type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
             key="task_up",
             accept_multiple_files=True,
         )
@@ -372,7 +372,7 @@ def calibration_data_ui() -> None:
     with col_rubric:
         st.subheader("📐 The Rubric")
         rubric_file = st.file_uploader(
-            "Grading criteria & weightings", type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key="rubric_up"
+            "Grading criteria & weightings", type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"], key="rubric_up"
         )
         _read_uploaded_once(rubric_file, "rubric_text", "_rubric_file_id")
         if rubric_file is not None and not st.session_state["rubric_text"].strip():
@@ -390,7 +390,7 @@ def calibration_data_ui() -> None:
     samples = st.session_state["reference_samples"]
     for (key, label), col in zip(REFERENCE_KEYS, cols):
         with col:
-            up = st.file_uploader(label, type=["pdf", "docx", "xlsx", "txt", "md", "csv"], key=f"ref_{key}")
+            up = st.file_uploader(label, type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"], key=f"ref_{key}")
             if up:
                 samples[key] = _first_text(up)
             status = "✅ loaded" if samples.get(key) else "— empty"
@@ -407,7 +407,7 @@ def calibration_data_ui() -> None:
     )
     marker_files = st.file_uploader(
         "Answer key / marking notes (you can add several files)",
-        type=["pdf", "docx", "xlsx", "txt", "md", "csv"],
+        type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
         key="marker_up",
         accept_multiple_files=True,
     )
@@ -502,7 +502,7 @@ def batch_ui() -> None:
     uploads = st.file_uploader(
         "Drop all reports (PDF/DOCX/XLSX/TXT) or a single .zip — a student's "
         "Word report and Excel workbook can be uploaded together",
-        type=["pdf", "docx", "xlsx", "txt", "md", "csv", "zip"],
+        type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv", "png", "jpg", "jpeg", "zip"],
         accept_multiple_files=True,
         key="batch_up",
     )
