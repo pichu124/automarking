@@ -201,6 +201,33 @@ def _grade_pass1(
     return raw_results, errors
 
 
+def _sane_component_scores(graded: GradingResult) -> List[float]:
+    """Component scores clamped into [0, max_score].
+
+    Models occasionally emit impossible values (negative, or above the
+    component maximum); left unchecked these propagate into the exported
+    grades.
+    """
+    return [
+        max(0.0, min(float(c.max_score), float(c.score))) for c in graded.components
+    ]
+
+
+def _sane_raw_total(graded: GradingResult) -> float:
+    """The report's raw total, trusting the COMPONENT SUM over `total`.
+
+    The exported table shows component scores and a total; if the model's
+    `total` field disagrees with the sum of its own components, the printed
+    figures would not add up. The component breakdown is what the marker and
+    student can verify, so it wins. `total` is used only when there are no
+    components to sum.
+    """
+    scores = _sane_component_scores(graded)
+    if not scores:
+        return _clamp_total(graded.total)
+    return _clamp_total(sum(scores))
+
+
 def _finalize(
     raw_results: Sequence[tuple[str, GradingResult]],
     calibration_config: CalibrationConfig | None,
@@ -210,13 +237,19 @@ def _finalize(
     Pure calculation — no LLM calls — so it can be re-run for free to apply new
     calibration settings.
     """
-    raw_totals = [_clamp_total(g.total) for _, g in raw_results]
+    raw_totals = [_sane_raw_total(g) for _, g in raw_results]
     final_totals, calib = calibrate_scores(raw_totals, calibration_config)
 
     reports: List[CalibratedReport] = []
     for (source_name, graded), raw_total, final_total in zip(raw_results, raw_totals, final_totals):
-        max_scores = [c.max_score for c in graded.components]
-        scores = [c.score for c in graded.components]
+        max_scores = [float(c.max_score) for c in graded.components]
+        scores = _sane_component_scores(graded)
+        # A calibrated total can only be distributed across the components that
+        # exist; if the model returned a partial rubric (component maxima
+        # summing to less than 100) the report is capped at what it can hold,
+        # so the printed components always add up to the printed total.
+        if max_scores:
+            final_total = min(final_total, sum(max_scores))
         new_scores = rescale_components(scores, max_scores, raw_total, final_total)
         components = [
             ComponentGrade(

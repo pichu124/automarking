@@ -39,6 +39,10 @@ _CHAR_REPLACEMENTS = {
     " ": " ", " ": " ", " ": " ", " ": " ", "​": "",   # spaces
     "°": " deg", "™": "(TM)", "®": "(R)", "©": "(C)",       # symbols
     "€": "EUR", "£": "GBP", "¥": "JPY", "₫": "VND",         # currency
+    # Letters with no decomposition (NFKD leaves them intact), notably
+    # Vietnamese d-with-stroke - without these the letter is dropped entirely.
+    "đ": "d", "Đ": "D", "ø": "o", "Ø": "O", "ß": "ss",
+    "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ł": "l", "Ł": "L",
 }
 
 
@@ -72,7 +76,7 @@ def build_grade_document(
     doc = Document()
     _build_styles(doc)
 
-    title = doc.add_heading(f"Grade Report — {session_name}", level=0)
+    title = doc.add_heading(sanitize_text(f"Grade Report - {session_name}"), level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     if calibration is not None:
@@ -105,7 +109,7 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
         cells[1].text = value
 
     if graded_by:
-        row("Graded by", graded_by)
+        row("Graded by", sanitize_text(graded_by))
     row("Reports graded", str(calib.n))
     row("Calibrated mean", f"{calib.final_mean:.2f}%  (raw {calib.raw_mean:.2f}%)")
     row("High Distinction (>=80%)", f"{calib.hd_count}  (cap {calib.hd_cap})")
@@ -116,8 +120,8 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
     if calib.low_discrimination:
         warn = doc.add_paragraph()
         run = warn.add_run(
-            "⚠ Low differentiation: the model gave very similar raw scores "
-            f"(spread ±{calib.raw_std:.1f}), so the calibrated grades barely "
+            "Low differentiation: the model gave very similar raw scores "
+            f"(spread +/-{calib.raw_std:.1f}), so the calibrated grades barely "
             "separate students. Consider re-grading with a stronger model."
         )
         run.italic = True
@@ -148,12 +152,12 @@ def _set_fixed_widths(table, widths) -> None:
 
 
 def _add_student_section(doc: Document, report: CalibratedReport) -> None:
-    heading = doc.add_heading(report.student_identifier, level=1)
+    heading = doc.add_heading(sanitize_text(report.student_identifier), level=1)
     heading.runs[0].font.color.rgb = RGBColor.from_string(_HEADER_FILL)
 
     meta = doc.add_paragraph()
     meta.add_run("Source: ").bold = True
-    meta.add_run(report.source_name)
+    meta.add_run(sanitize_text(report.source_name))
 
     # Component table: Component | Score | Max | Professor's Notes
     table = doc.add_table(rows=1, cols=4)
@@ -185,7 +189,7 @@ def _add_student_section(doc: Document, report: CalibratedReport) -> None:
     # Total line
     total_p = doc.add_paragraph()
     total_run = total_p.add_run(
-        f"Total: {report.final_total:g} / 100   ·   {report.band}"
+        sanitize_text(f"Total: {report.final_total:g} / 100 - {report.band}")
     )
     total_run.bold = True
     total_run.font.size = Pt(12)

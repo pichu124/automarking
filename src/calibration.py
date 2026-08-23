@@ -199,17 +199,20 @@ def rescale_components(
 ) -> List[float]:
     """Rescale component scores so they sum to ``new_total`` after calibration.
 
-    Each component is scaled by ``new_total / old_total`` and clamped to its
-    maximum; any rounding drift is absorbed by the component with the most
-    headroom so the sum matches ``new_total`` exactly.
+    Each component is scaled by ``new_total / old_total`` and clamped to
+    ``[0, max_score]``; any rounding drift is absorbed by the component with
+    the most headroom so the sum matches ``new_total`` exactly. Inputs are
+    clamped first, so impossible model output (negative scores, or scores above
+    the component maximum) cannot propagate into the exported grades.
     """
     maxes = [float(m) for m in max_scores]
+    scores = [_clamp(float(s), 0.0, maxes[i]) for i, s in enumerate(scores)]
     if old_total <= 0:
         total_max = sum(maxes) or 1.0
         out = [round(new_total * m / total_max, 1) for m in maxes]
     else:
         factor = new_total / old_total
-        out = [round(min(maxes[i], scores[i] * factor), 1) for i in range(len(scores))]
+        out = [round(_clamp(scores[i] * factor, 0.0, maxes[i]), 1) for i in range(len(scores))]
 
     # Absorb drift into the component with the largest remaining headroom.
     drift = round(new_total - sum(out), 1)
