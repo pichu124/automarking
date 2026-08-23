@@ -133,3 +133,45 @@ def test_xlsx_formulas_dates_merged_cells():
     wb.save(buf)
     text = parse_bytes("odd.xlsx", buf.getvalue())[0].text
     assert "Total" in text and "Merged header" in text and "0.191" in text
+
+
+# --- Readability health check (scanned PDFs must be flagged, not graded) -----
+
+def test_scanned_pdf_flagged_as_no_text():
+    from src.document_parser import text_health
+
+    # What a scanned PDF produces: an image note and no body text.
+    scanned = (
+        "[NOTE: this document contains 12 embedded image(s) - e.g. screenshots, "
+        "charts, figures - whose content cannot be extracted as text here. ...]\n\n"
+    )
+    assert text_health(scanned) == "no-text"
+
+
+def test_health_labels():
+    from src.document_parser import HEALTH_HINTS, text_health
+
+    assert text_health("[Could not read x.pdf: EOF marker not found]") == "read-failed"
+    assert text_health("[Unsupported binary file format (a.doc): ...]") == "unsupported-format"
+    assert text_health("") == "no-text"
+    assert text_health("tiny") == "no-text"                       # under 20 chars
+    assert text_health("A short but real answer. " * 4) == "little-text"
+    assert text_health("A proper paragraph of student writing. " * 20) is None
+    assert set(HEALTH_HINTS) == {"read-failed", "unsupported-format", "no-text", "little-text"}
+
+
+def test_health_ok_when_one_file_in_group_is_readable():
+    from src.document_parser import text_health
+
+    merged = (
+        "=== File: s41_report.docx ===\n" + ("Real analysis text. " * 30) +
+        "\n\n=== File: s41_scan.pdf ===\n[NOTE: this document contains 3 embedded image(s) ...]"
+    )
+    assert text_health(merged) is None
+
+
+def test_standalone_image_submission_flagged():
+    from src.document_parser import parse_bytes, text_health
+
+    docs = parse_bytes("only_photo.png", _PNG)
+    assert text_health(docs[0].text) == "no-text"

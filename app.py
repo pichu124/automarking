@@ -24,7 +24,13 @@ from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 _BASE_REPORT_CAP = config.MAX_REPORT_CHARS
 _BASE_SAMPLE_CAP = config.MAX_SAMPLE_CHARS
 from src.docx_export import build_grade_document, sanitize_text
-from src.document_parser import ParsedDocument, group_by_student, parse_upload
+from src.document_parser import (
+    HEALTH_HINTS,
+    ParsedDocument,
+    group_by_student,
+    parse_upload,
+    text_health,
+)
 from src.estimator import compare_providers, estimate_batch, static_context_text
 from src.grading_engine import (
     SAMPLE_LEVELS,
@@ -393,8 +399,13 @@ def calibration_data_ui() -> None:
             up = st.file_uploader(label, type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"], key=f"ref_{key}")
             if up:
                 samples[key] = _first_text(up)
-            status = "✅ loaded" if samples.get(key) else "— empty"
-            st.caption(status)
+            sample_text = samples.get(key, "")
+            if not sample_text:
+                st.caption("— empty")
+            elif text_health(sample_text):
+                st.caption(f"⚠️ loaded but {HEALTH_HINTS[text_health(sample_text)]}")
+            else:
+                st.caption("✅ loaded")
     st.session_state["reference_samples"] = samples
 
     st.subheader("🔑 Marker-only materials (optional)")
@@ -528,10 +539,26 @@ def batch_ui() -> None:
             st.info(f"{len(docs)} submission(s) from {raw_n} files.")
         else:
             st.info(f"{len(docs)} submission(s) ready.")
-        with st.expander("Review submissions / grouping", expanded=raw_n != len(docs)):
-            for d in docs:
+        problems = [(d, text_health(d.text)) for d in docs]
+        unreadable = [(d, h) for d, h in problems if h]
+        if unreadable:
+            lines = "\n".join(
+                f"- **{d.name}** — {HEALTH_HINTS[h]}" for d, h in unreadable
+            )
+            st.warning(
+                f"⚠️ **{len(unreadable)} submission(s) have little or no readable "
+                "text** and would be graded on almost nothing:\n\n" + lines +
+                "\n\nFix the files (OCR / re-export / convert) and re-upload, or "
+                "remove them and grade those students manually."
+            )
+        with st.expander(
+            "Review submissions / grouping",
+            expanded=(raw_n != len(docs)) or bool(unreadable),
+        ):
+            for d, health in problems:
                 n_files = d.text.count("=== File: ") or 1
-                st.write(f"• **{d.name}** — {n_files} file(s), ~{len(d.text):,} chars")
+                flag = f"  ⚠️ *{HEALTH_HINTS[health]}*" if health else ""
+                st.write(f"• **{d.name}** — {n_files} file(s), ~{len(d.text):,} chars{flag}")
 
 
 def _effective_samples() -> dict:

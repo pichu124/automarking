@@ -340,6 +340,56 @@ def parse_upload(uploaded_file) -> List[ParsedDocument]:
     return parse_bytes(uploaded_file.name, uploaded_file.getvalue())
 
 
+# --- Readability health check ----------------------------------------------
+# Scanned PDFs (no text layer), read failures and image-only submissions carry
+# little or no gradable text. Grading them would silently produce a low mark
+# based on nothing, so the UI surfaces these BEFORE the batch runs.
+
+_ANNOTATION_RES = (
+    re.compile(r"\[NOTE: this document contains[^\]]*\]"),
+    re.compile(r"\[Image file[^\]]*\]"),
+    re.compile(r"\[Could not read[^\]]*\]"),
+    re.compile(r"\[Unsupported binary file format[^\]]*\]"),
+    re.compile(r"=== File: [^=]*==="),
+)
+
+
+def text_health(text: str) -> str | None:
+    """A short problem label when extracted text is unusable for grading.
+
+    Returns None when the text looks gradable. Labels:
+      'read-failed'        - a file could not be parsed at all
+      'unsupported-format' - binary format we cannot extract
+      'no-text'            - nothing readable (typically a scanned PDF or an
+                             image-only submission)
+      'little-text'        - under ~300 characters of real content
+    """
+    raw = text or ""
+    body = raw
+    for pattern in _ANNOTATION_RES:
+        body = pattern.sub("", body)
+    body = body.strip()
+    if len(body) >= 300:
+        return None
+    if "[Could not read" in raw:
+        return "read-failed"
+    if "[Unsupported binary file format" in raw:
+        return "unsupported-format"
+    if len(body) < 20:
+        return "no-text"
+    return "little-text"
+
+
+HEALTH_HINTS = {
+    "read-failed": "file could not be parsed - re-export it (e.g. save as a "
+                   "new .docx/.pdf) or convert the format",
+    "unsupported-format": "unsupported format - convert to docx/pdf/xlsx/csv",
+    "no-text": "no readable text - likely a scanned PDF or image-only "
+               "submission; run OCR or request a text version",
+    "little-text": "very little readable text - check the file before grading",
+}
+
+
 # --- Grouping files into per-student submissions ---------------------------
 # A submission often spans several files (a Word report + an Excel workbook).
 # Group by student ID in the filename (e.g. s4180007); files without an ID
