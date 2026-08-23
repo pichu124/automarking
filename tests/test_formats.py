@@ -114,3 +114,22 @@ def test_unknown_binary_yields_placeholder_not_mojibake():
 def test_looks_binary_heuristic():
     assert _looks_binary("\x00\x01�" * 100)
     assert not _looks_binary("A normal paragraph of prose, nothing odd here.")
+
+
+def test_xlsx_formulas_dates_merged_cells():
+    import datetime
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "Total"
+    ws["B1"] = "=SUM(C1:C3)"                  # formula: data_only -> None, skipped
+    ws["A2"] = datetime.date(2026, 8, 1)
+    ws["B2"] = 0.191
+    ws.merge_cells("A3:C3")
+    ws["A3"] = "Merged header"
+    buf = io.BytesIO()
+    wb.save(buf)
+    text = parse_bytes("odd.xlsx", buf.getvalue())[0].text
+    assert "Total" in text and "Merged header" in text and "0.191" in text

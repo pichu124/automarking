@@ -126,11 +126,12 @@ def calibrate_scores(
         return s
 
     def scores_for_shift(t: float) -> List[float]:
-        # avoid_boundaries is monotonic (only pushes down, never up across a
-        # threshold), so the ranking and the caps are preserved, and the cohort
-        # mean stays monotonic in t — the binary search below still converges.
+        # clamp -> avoid_boundaries -> round, all monotonic, so ranking and the
+        # caps are preserved and the cohort mean is non-decreasing in t.
+        # Rounding happens HERE (not after the cap checks) so a 69.96 can never
+        # round up to 70.0 and slip into a band after the caps were verified.
         return [
-            avoid_boundaries(_clamp(sorted_raw[p] + t, floor, ceil_by_rank[p]))
+            round(avoid_boundaries(_clamp(sorted_raw[p] + t, floor, ceil_by_rank[p])), 1)
             for p in range(n)
         ]
 
@@ -152,20 +153,24 @@ def calibrate_scores(
     t = solve_shift()
     scores_sorted = scores_for_shift(t)
 
-    # DI-overflow correction. Demote from the bottom of the DI band upward;
-    # each demoted rank is capped below 70 permanently, so the loop terminates.
+    # DI-overflow correction. Scores are non-increasing in rank, so the ranks
+    # occupying the DI band form a contiguous run; demote the ceiling of the
+    # ENTIRE SUFFIX from that run's last member downward. A suffix demotion
+    # keeps the ceiling sequence non-increasing, which is what guarantees the
+    # clamp can never invert the ranking (demoting a single mid-sequence rank
+    # could put a higher-raw student below a lower-raw one). Each pass moves
+    # the demotion frontier strictly upward, so this terminates.
     for _ in range(n + 1):
         di_positions = [
             p for p in range(n) if cfg.di_lower <= scores_sorted[p] < cfg.di_upper
         ]
         if len(di_positions) <= n_di:
             break
-        worst = max(di_positions)  # lowest-ranked report currently in the DI band
-        ceil_by_rank[worst] = cfg.base_ceiling
+        frontier = max(di_positions)  # last rank currently inside the DI band
+        for p in range(frontier, n):
+            ceil_by_rank[p] = min(ceil_by_rank[p], cfg.base_ceiling)
         t = solve_shift()
         scores_sorted = scores_for_shift(t)
-
-    scores_sorted = [round(s, 1) for s in scores_sorted]
 
     final = [0.0] * n
     for p, i in enumerate(order):

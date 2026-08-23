@@ -140,3 +140,48 @@ def test_rescale_components_zero_old_total():
     maxes = [50.0, 50.0]
     new = rescale_components(scores, maxes, old_total=0.0, new_total=60.0)
     assert abs(sum(new) - 60.0) < 0.11
+
+
+def test_fuzz_invariants_across_sidebar_configs():
+    """Seeded sweep over every sidebar-reachable config x cohort shape.
+
+    Pins the two defects fuzzing found: mid-sequence ceiling demotion breaking
+    rank monotonicity (higher raw -> lower final), and band counts checked on
+    unrounded scores (69.96 rounding up into the DI band after the check).
+    """
+    import dataclasses
+    import itertools
+
+    random.seed(7)
+    cohorts = []
+    for n in (1, 3, 8, 21, 40):
+        cohorts.append([min(100, max(0, random.gauss(70, 12))) for _ in range(n)])
+        cohorts.append([min(100, max(0, random.gauss(88, 3))) for _ in range(n)])
+        cohorts.append([min(100, max(0, random.gauss(30, 8))) for _ in range(n)])
+        cohorts.append([70.0] * n)
+    configs = itertools.product(
+        (55.0, 65.5, 75.0), (0, 10, 30), (0, 20, 40),
+        ((True, 1.5), (True, 3.0), (False, 1.5)),
+    )
+    for mean, hd, di, (avoid, guard) in configs:
+        cfg = dataclasses.replace(
+            CFG, target_mean_low=mean - 0.5, target_mean_high=mean + 0.5,
+            hd_cap_fraction=hd / 100, di_cap_fraction=di / 100,
+            avoid_band_boundaries=avoid, boundary_guard=guard,
+        )
+        for raw in cohorts:
+            n = len(raw)
+            final, _ = calibrate_scores(raw, cfg)
+            assert sum(1 for s in final if s >= cfg.hd_threshold) <= math.floor(hd / 100 * n)
+            assert sum(1 for s in final if cfg.di_lower <= s < cfg.di_upper) <= math.floor(di / 100 * n)
+            assert all(cfg.score_floor - 0.01 <= s <= cfg.score_ceiling + 0.01 for s in final)
+            if avoid:
+                assert not any(
+                    T - guard + 0.05 < s < T - 0.05
+                    for s in final for T in (60.0, 70.0, 80.0)
+                )
+            order = sorted(range(n), key=lambda i: raw[i], reverse=True)
+            of = [final[i] for i in order]
+            assert all(of[k] >= of[k + 1] - 0.11 for k in range(n - 1)), (
+                f"rank inversion: cfg=({mean},{hd},{di},{avoid},{guard})"
+            )

@@ -63,6 +63,10 @@ def sanitize_text(text: str) -> str:
     text = "".join(c for c in text if not unicodedata.combining(c))
     # Anything still non-ASCII becomes a space, then collapse runs of spaces.
     text = "".join(c if ord(c) < 128 else " " for c in text)
+    # Strip control characters (except tab/newline): lxml rejects them, so one
+    # stray \x0b from a model or PDF would otherwise crash the export at the
+    # very end of a paid grading run.
+    text = "".join(c for c in text if c in "\t\n" or 32 <= ord(c) < 127)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 

@@ -349,14 +349,22 @@ _STUDENT_ID_RE = re.compile(r"[sS](\d{6,8})")
 
 
 def _group_key(name: str) -> tuple:
-    base = name.rsplit("/", 1)[-1]
-    match = _STUDENT_ID_RE.search(base)
+    path = name.replace("\\", "/")
+    # Search the FULL path: in LMS exports (Moodle/Canvas) the student ID often
+    # lives in the per-student folder name, not in the file name itself.
+    match = _STUDENT_ID_RE.search(path)
     if match:
         return ("id", match.group(1))
+    folder, _, base = path.rpartition("/")
     stem = base.rsplit(".", 1)[0].lower()
     stem = re.sub(r"\s*\(\d+\)\s*$", "", stem)      # drop copy suffixes " (1)"
     stem = re.sub(r"[^a-z0-9]+", "", stem)           # normalise punctuation
-    return ("stem", stem or base.lower())
+    # The parent folder is part of the identity: LMS zips give every student a
+    # folder containing generically named files ("report.docx"), and without
+    # the folder the whole class would collapse into one submission.
+    folder_norm = re.sub(r"[^a-z0-9]+", "", folder.lower())
+    key = f"{folder_norm}/{stem}" if folder_norm else (stem or base.lower())
+    return ("stem", key)
 
 
 def group_by_student(
@@ -370,10 +378,26 @@ def group_by_student(
     """
     if not enabled:
         return list(docs)
+
+    # LMS (Moodle/Canvas) zips give each student their own folder holding a
+    # couple of generically named files. For ID-less files, a small folder
+    # (<= 4 files) is treated as one student's submission; big folders (a
+    # whole-class dump, or "Word/" vs "Excel/" type folders) are not, so a
+    # class can never collapse into one group.
+    def _folder(name: str) -> str:
+        return name.replace("\\", "/").rpartition("/")[0]
+
+    folder_counts: dict = {}
+    for doc in docs:
+        folder_counts[_folder(doc.name)] = folder_counts.get(_folder(doc.name), 0) + 1
+
     groups: dict = {}
     order: List[tuple] = []
     for doc in docs:
         key = _group_key(doc.name)
+        folder = _folder(doc.name)
+        if key[0] == "stem" and folder and folder_counts.get(folder, 0) <= 4:
+            key = ("folder", folder)
         if key not in groups:
             groups[key] = []
             order.append(key)
