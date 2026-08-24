@@ -420,6 +420,22 @@ def text_health(text: str) -> str | None:
     return "little-text"
 
 
+_FAILURE_REASON_RE = re.compile(r"\[Could not read [^:\]]*:\s*([^\]]+)\]")
+
+
+def read_failure_reason(text: str) -> str | None:
+    """The exception message inside the first '[Could not read ...]' note.
+
+    Surfacing the actual reason in the UI turns "file could not be parsed"
+    into something actionable (e.g. "The 'pyxlsb' package is required...").
+    """
+    match = _FAILURE_REASON_RE.search(text or "")
+    if not match:
+        return None
+    reason = " ".join(match.group(1).split())
+    return reason[:300] if reason else None
+
+
 HEALTH_HINTS = {
     "read-failed": "file could not be parsed - re-export it (e.g. save as a "
                    "new .docx/.pdf) or convert the format",

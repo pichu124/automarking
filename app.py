@@ -34,6 +34,7 @@ from src.document_parser import (
     ParsedDocument,
     group_by_student,
     parse_upload,
+    read_failure_reason,
     text_health,
 )
 from src.estimator import compare_providers, estimate_batch, static_context_text
@@ -658,9 +659,14 @@ def batch_ui() -> None:
         problems = [(d, text_health(d.text)) for d in docs]
         unreadable = [(d, h) for d, h in problems if h]
         if unreadable:
-            lines = "\n".join(
-                f"- **{d.name}** — {HEALTH_HINTS[h]}" for d, h in unreadable
-            )
+            def _line(d, h):
+                line = f"- **{d.name}** — {HEALTH_HINTS[h]}"
+                reason = read_failure_reason(d.text)
+                if reason:
+                    line += f"\n  - ⚙️ reason: `{reason}`"
+                return line
+
+            lines = "\n".join(_line(d, h) for d, h in unreadable)
             st.warning(
                 f"⚠️ **{len(unreadable)} submission(s) have little or no readable "
                 "text** and would be graded on almost nothing:\n\n" + lines +

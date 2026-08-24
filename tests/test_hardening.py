@@ -86,6 +86,18 @@ def test_mojibake_body_is_never_labelled_healthy():
     assert text_health(garbage) == "read-failed"
 
 
+def test_read_failure_reason_is_surfaced():
+    from src.document_parser import read_failure_reason
+
+    docs = parse_bytes("Team02_Excel.xlsb", b"\x00\x01 not a workbook" * 50)
+    assert text_health(docs[0].text) == "read-failed"
+    assert read_failure_reason(docs[0].text) == "File is not a zip file"
+    # A missing-dependency failure names the fix directly.
+    fake = "[Could not read a.xlsb: The 'pyxlsb' package is required to read .xlsb files. Install it with: pip install pyxlsb]"
+    assert "pip install pyxlsb" in read_failure_reason(fake)
+    assert read_failure_reason("healthy essay text") is None
+
+
 def test_student_id_never_matches_inside_a_word():
     docs = [
         ParsedDocument("Alice Nguyen - Results20230815.docx", "alice's essay"),
