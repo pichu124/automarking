@@ -830,6 +830,16 @@ def _estimate_ui(session: GradingSession) -> None:
             "**reference sample length** in the sidebar 📏 until it fits, while "
             "keeping the report length high."
         )
+        if est.tokens_per_request_max > 180_000:
+            st.warning(
+                f"🚧 The largest request (≈ {est.tokens_per_request_max:,} tokens) "
+                "may exceed the model's context window (200k tokens for most "
+                "Claude models, 1M for some). Usually one submission carries a "
+                "huge raw-data spreadsheet. If a request is rejected, the app "
+                "automatically retries that one submission with the oversized "
+                "tail trimmed — or set **📏 Student report — max characters** "
+                "to keep requests small up front."
+            )
         if provider_key == "ollama":
             st.warning(
                 "⏱️ Local speed depends heavily on your CPU/GPU. On a 16GB "

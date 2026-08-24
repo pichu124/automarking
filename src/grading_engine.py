@@ -28,6 +28,7 @@ provider. The result records which one, and whether a fallback happened.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Protocol, Sequence
 
@@ -173,6 +174,40 @@ def _is_provider_unhealthy(exc: Exception) -> bool:
     return any(tok in blob for tok in _HEALTH_MESSAGE_TOKENS)
 
 
+# --- Context-window overflow: retry the one report with a trimmed body ------
+
+# Phrases that mean "this REQUEST exceeds the model's context window" (Anthropic
+# and OpenAI-compatible wordings). Distinct from rate-limit style "request too
+# large" (Groq TPM), which correctly falls back to a bigger-context provider.
+_CONTEXT_OVERFLOW_TOKENS = (
+    "prompt is too long",
+    "maximum context length",
+    "context_length_exceeded",
+    "context window",
+    "exceeds the maximum number of tokens",
+)
+
+
+def _context_overflow_keep_chars(exc: Exception, current_chars: int) -> int | None:
+    """How many chars of the report to keep for a retry, or None if ``exc`` is
+    not a context-window overflow.
+
+    APIs state the actual and maximum token counts in the message (e.g.
+    "1600280 tokens > 1000000 maximum"); scale the report to fit with 15%
+    headroom. Without parseable numbers, halve it.
+    """
+    msg = str(exc).lower()
+    if not any(tok in msg for tok in _CONTEXT_OVERFLOW_TOKENS):
+        return None
+    nums = [int(n.replace(",", "")) for n in re.findall(r"\d[\d,]{3,}", msg)]
+    nums = [n for n in nums if n >= 1000]
+    if len(nums) >= 2 and max(nums) > min(nums):
+        keep = int(current_chars * (min(nums) / max(nums)) * 0.85)
+    else:
+        keep = current_chars // 2
+    return max(2000, min(keep, current_chars - 1))
+
+
 # --- Pass 1 / Pass 2 helpers ----------------------------------------------
 
 def _grade_pass1(
@@ -181,30 +216,56 @@ def _grade_pass1(
     documents: Sequence[ParsedDocument],
     progress_callback: ProgressCallback | None,
     raise_on_unhealthy: bool,
-) -> tuple[List[tuple[str, GradingResult]], List[str]]:
+) -> tuple[List[tuple[str, GradingResult]], List[str], List[str]]:
     """Grade every document with one grader.
 
     Raises ``ProviderUnavailable`` (when ``raise_on_unhealthy``) on the first
     provider-health failure, so the caller can discard partial work and switch.
-    Returns ``(source_name, GradingResult)`` pairs — the raw text is dropped so
-    the result can be re-calibrated later without holding the whole batch.
+    Returns ``(pairs, errors, notes)`` where pairs are ``(source_name,
+    GradingResult)`` — the raw text is dropped so the result can be
+    re-calibrated later without holding the whole batch — and notes record
+    non-fatal interventions (e.g. an oversized submission auto-trimmed to fit
+    the model's context window).
     """
     raw_results: List[tuple[str, GradingResult]] = []
     errors: List[str] = []
+    notes: List[str] = []
     total = len(documents)
     for idx, doc in enumerate(documents):
         if progress_callback:
             progress_callback(idx, total, f"Grading {doc.name}")
+        report_text = doc.text
         try:
-            graded = grader.grade_report(
-                task_text=session.task_text,
-                rubric_text=session.rubric_text,
-                components=session.components,
-                reference_samples=session.reference_samples,
-                source_name=doc.name,
-                report_text=doc.text,
-                marker_materials=session.marker_materials,
-            )
+            # A submission with a giant spreadsheet dump can exceed the model's
+            # context window outright. That is a property of ONE report, so
+            # retry it (up to twice) with the body trimmed to fit rather than
+            # failing the report or switching provider.
+            for attempt in range(3):
+                try:
+                    graded = grader.grade_report(
+                        task_text=session.task_text,
+                        rubric_text=session.rubric_text,
+                        components=session.components,
+                        reference_samples=session.reference_samples,
+                        source_name=doc.name,
+                        report_text=report_text,
+                        marker_materials=session.marker_materials,
+                    )
+                    break
+                except Exception as exc:
+                    keep = _context_overflow_keep_chars(exc, len(report_text))
+                    if keep is None or attempt == 2 or keep >= len(report_text):
+                        raise
+                    report_text = report_text[:keep].rstrip() + (
+                        "\n\n[NOTE: the submission was truncated HERE because it "
+                        "exceeded the model's context window. Do not treat "
+                        "content after this point as missing.]"
+                    )
+                    notes.append(
+                        f"{doc.name}: too large for the model's context window; "
+                        f"auto-retried with the first ~{keep:,} characters "
+                        "(the tail — usually raw spreadsheet rows — was trimmed)."
+                    )
             if not graded.components:
                 # Nothing to grade against — recording an error is honest;
                 # letting it through would invent a grade from the calibration
@@ -219,7 +280,7 @@ def _grade_pass1(
             errors.append(f"{doc.name}: {exc}")
     if progress_callback:
         progress_callback(total, total, "Calibrating cohort")
-    return raw_results, errors
+    return raw_results, errors, notes
 
 
 def _finite(x: float) -> float:
@@ -326,9 +387,10 @@ def grade_batch(
     """Run both passes with one provider (no fallback). Per-report errors are
     recorded, never raised."""
     result = BatchResult()
-    raw_results, result.errors = _grade_pass1(
+    raw_results, result.errors, pass_notes = _grade_pass1(
         grader, session, documents, progress_callback, raise_on_unhealthy=False
     )
+    result.notes.extend(pass_notes)
     if not raw_results:
         return result
     result.raw_grades = list(raw_results)
@@ -389,7 +451,7 @@ def grade_batch_with_fallback(
             progress_callback(done, total, prefix + msg)
 
         try:
-            raw_results, per_errors = _grade_pass1(
+            raw_results, per_errors, pass_notes = _grade_pass1(
                 grader, session, documents, cb, raise_on_unhealthy=True
             )
         except ProviderUnavailable as exc:
@@ -409,6 +471,7 @@ def grade_batch_with_fallback(
 
         # Success: this provider graded the whole cohort.
         result.errors = per_errors
+        result.notes.extend(pass_notes)
         result.raw_grades = list(raw_results)
         result.reports, result.calibration = _finalize(raw_results, calibration_config)
         result.provider_label = label

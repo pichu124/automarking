@@ -241,6 +241,76 @@ def test_component_maxima_above_100_still_add_up():
     assert all(0 <= c.score <= c.max_score for c in rp.components)
 
 
+def test_context_overflow_keep_chars_parses_api_messages():
+    from src.grading_engine import _context_overflow_keep_chars
+
+    anthropic = Exception(
+        "Error code: 400 - {'type': 'invalid_request_error', 'message': "
+        "'prompt is too long: 1600280 tokens > 1000000 maximum'}"
+    )
+    keep = _context_overflow_keep_chars(anthropic, 6_400_000)
+    assert keep is not None
+    # limit/actual * 0.85 => ~53% of the text kept.
+    assert 3_000_000 < keep < 3_500_000
+
+    openai_style = Exception(
+        "This model's maximum context length is 128000 tokens. However, your "
+        "messages resulted in 200000 tokens."
+    )
+    assert _context_overflow_keep_chars(openai_style, 800_000) is not None
+
+    assert _context_overflow_keep_chars(Exception("invalid json"), 10_000) is None
+    # Groq's TPM-style 413 must NOT be treated as an overflow (it falls back).
+    assert _context_overflow_keep_chars(
+        Exception("Request too large: tokens per minute (TPM) limit 12000"), 10_000
+    ) is None
+
+
+def test_oversized_submission_is_auto_trimmed_and_graded():
+    calls = []
+
+    class OverflowGrader:
+        label = "primary"
+
+        def grade_report(self, *, source_name, report_text, **_):
+            calls.append(len(report_text))
+            if len(report_text) > 100_000:
+                raise Exception(
+                    "Error code: 400 - prompt is too long: "
+                    f"{len(report_text) // 4} tokens > 25000 maximum"
+                )
+            return _ok(source_name)
+
+    huge = ParsedDocument("Team 1.docx [+1 file(s)]", "row,data\n" * 300_000)
+    normal = ParsedDocument("Team 2.docx", "a normal report")
+    res = grade_batch_with_fallback(
+        [ProviderSpec("p", label="primary"), ProviderSpec("q", label="secondary")],
+        _session(), [huge, normal],
+        builder=lambda spec: OverflowGrader(),
+    )
+    assert len(res.reports) == 2                 # the huge one still graded
+    assert res.errors == []
+    assert res.provider_label == "primary"       # no pointless fallback
+    assert any("context window" in n for n in res.notes)  # audit trail entry
+    assert len(calls) >= 3                       # original + trimmed retries
+    assert calls[-1] <= 100_000                  # final attempt fits
+
+
+def test_context_overflow_that_never_fits_stays_a_per_report_error():
+    class AlwaysOverflow:
+        label = "primary"
+
+        def grade_report(self, *, source_name, report_text, **_):
+            if source_name == "huge.docx":
+                raise Exception("prompt is too long: 999999 tokens > 1000 maximum")
+            return _ok(source_name)
+
+    docs = [ParsedDocument("huge.docx", "x" * 50_000), ParsedDocument("ok.docx", "fine")]
+    res = grade_batch(AlwaysOverflow(), _session(), docs)
+    assert len(res.reports) == 1
+    assert any("huge.docx" in e for e in res.errors)
+
+
 def test_model_prose_with_health_words_stays_a_content_error():
     # The model answered ONE report with prose (about a billing system!) instead
     # of JSON — a per-report content error, never a provider-health failure.
