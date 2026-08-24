@@ -2,8 +2,9 @@
 
 Workflow:
   1. New Grading Session — name it.
-  2. Calibration data — upload Task, Rubric, and four reference samples.
-     Structuring the rubric turns it into weighted components.
+  2. Calibration data — upload Task, Rubric, and up to four reference samples
+     (each slot accepts several files; any subset — or none — is enough to
+     grade). Structuring the rubric turns it into weighted components.
   3. Batch upload — drop in all student reports (or a .zip).
   4. Grade — runs the Two-Pass engine and shows the calibrated cohort.
   5. Download — a structured .docx grade report.
@@ -73,6 +74,16 @@ def _first_text(uploaded) -> str:
     return docs[0].text if docs else ""
 
 
+def _uploads_text(uploads) -> str:
+    """Concatenate the parsed text of several uploads, labelled by filename."""
+    docs = []
+    for up in uploads:
+        docs.extend(parse_upload(up))
+    if len(docs) <= 1:
+        return docs[0].text if docs else ""
+    return "\n\n".join(f"=== File: {d.name} ===\n{d.text.strip()}" for d in docs)
+
+
 def _calibration_config():
     """Build a CalibrationConfig from the sidebar controls (or the defaults)."""
     mid = st.session_state.get("cal_mean", 65.5)
@@ -112,15 +123,27 @@ def _read_uploads_once(uploads, text_key: str, ids_key: str) -> None:
     ids = tuple(u.file_id for u in uploads)
     if st.session_state.get(ids_key) == ids:
         return
-    docs = []
-    for up in uploads:
-        docs.extend(parse_upload(up))
-    if len(docs) <= 1:
-        st.session_state[text_key] = docs[0].text if docs else ""
-    else:
-        st.session_state[text_key] = "\n\n".join(
-            f"=== File: {d.name} ===\n{d.text.strip()}" for d in docs
-        )
+    st.session_state[text_key] = _uploads_text(uploads)
+    st.session_state[ids_key] = ids
+
+
+def _read_sample_uploads_once(key: str, uploads) -> None:
+    """Read one reference-sample slot (several files allowed) exactly once.
+
+    A sample submission often spans two files (Word essay + Excel workbook) —
+    they are concatenated with filename labels, like the task and batch
+    uploaders. Removing every file from the slot clears the sample again.
+    """
+    samples = st.session_state["reference_samples"]
+    ids_key = f"_ref_{key}_ids"
+    if not uploads:
+        if st.session_state.pop(ids_key, None) is not None:
+            samples.pop(key, None)
+        return
+    ids = tuple(u.file_id for u in uploads)
+    if st.session_state.get(ids_key) == ids:
+        return
+    samples[key] = _uploads_text(uploads)
     st.session_state[ids_key] = ids
 
 
@@ -300,7 +323,8 @@ def sidebar() -> None:
             value=int(st.session_state.get("sample_cap", _BASE_SAMPLE_CAP)), step=2000,
             help="Samples are calibration anchors — an excerpt is enough. LOWER "
                  "this first to shrink each request (biggest lever for small "
-                 "contexts like Ollama). 4 samples are sent every request.",
+                 "contexts like Ollama). Every provided sample is sent every "
+                 "request.",
         )
         st.session_state["report_cap"] = report_cap
         st.session_state["sample_cap"] = sample_cap
@@ -346,6 +370,7 @@ def sidebar() -> None:
                 "reference_samples", "components", "documents", "batch_result",
                 "marker_text", "sample_profiles", "use_profiles",
                 "_task_file_id", "_rubric_file_id", "_marker_file_id",
+                *(f"_ref_{k}_ids" for k, _ in REFERENCE_KEYS),
             ):
                 st.session_state.pop(key, None)
             _init_state()
@@ -392,18 +417,29 @@ def calibration_data_ui() -> None:
         )
 
     st.subheader("🎯 Reference Samples (calibration anchors)")
+    st.caption(
+        "Optional — grading works with any subset of anchors (or none), but "
+        "each one you provide sharpens the standard. A slot accepts several "
+        "files (e.g. a sample's Word report **and** its Excel workbook)."
+    )
     cols = st.columns(4)
     samples = st.session_state["reference_samples"]
     for (key, label), col in zip(REFERENCE_KEYS, cols):
         with col:
-            up = st.file_uploader(label, type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"], key=f"ref_{key}")
-            if up:
-                samples[key] = _first_text(up)
+            ups = st.file_uploader(
+                label,
+                type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
+                key=f"ref_{key}",
+                accept_multiple_files=True,
+            )
+            _read_sample_uploads_once(key, ups)
             sample_text = samples.get(key, "")
             if not sample_text:
                 st.caption("— empty")
             elif text_health(sample_text):
                 st.caption(f"⚠️ loaded but {HEALTH_HINTS[text_health(sample_text)]}")
+            elif ups and len(ups) > 1:
+                st.caption(f"✅ {len(ups)} files loaded")
             else:
                 st.caption("✅ loaded")
     st.session_state["reference_samples"] = samples
@@ -672,8 +708,23 @@ def grade_ui() -> None:
         and st.session_state["documents"]
     )
     if not ready:
-        st.caption("Need: a task, structured rubric components, and at least one report.")
+        st.caption("Need: a task, structured rubric components, and at least one report. "
+                   "Reference samples are optional.")
     else:
+        anchors = [
+            label for key, label in REFERENCE_KEYS
+            if (_effective_samples().get(key) or "").strip()
+        ]
+        if not anchors:
+            st.caption(
+                "🎯 No reference samples — the model will grade against the "
+                "rubric and task alone (fine, but anchors sharpen calibration)."
+            )
+        elif len(anchors) < len(REFERENCE_KEYS):
+            st.caption(
+                f"🎯 Calibration anchors in use: {', '.join(anchors)}. Missing "
+                "levels are interpolated from these and the rubric."
+            )
         _estimate_ui(_session_from_state())
 
     if st.button("🚀 Run Two-Pass Grading", type="primary", disabled=not ready):

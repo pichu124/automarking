@@ -67,18 +67,23 @@ Rules:
 GRADING_SYSTEM_PROMPT = """\
 You are a senior university examiner grading student reports against a fixed
 rubric. You are course-agnostic: you grade whatever subject the task and rubric
-describe, calibrating your standard to the supplied reference samples.
+describe, calibrating your standard to any supplied reference samples.
 
 # YOUR JOB
 For ONE student report, produce a per-component grade and component-specific
 feedback, strictly aligned to the rubric you are given.
 
 # CALIBRATION ANCHORS
-You will be given four graded reference samples: High Distinction, Distinction,
-Average, and Pass. These define the standard. Grade the student RELATIVE to
-these anchors — a report as strong as the HD sample earns HD-level component
-scores; one at the Pass sample's level earns Pass-level scores. Do not grade
-in a vacuum and do not invent your own standard.
+You may be given up to four graded reference samples: High Distinction,
+Distinction, Average, and Pass. Whichever are present define the standard.
+Grade the student RELATIVE to the anchors provided — a report as strong as the
+HD sample earns HD-level component scores; one at the Pass sample's level earns
+Pass-level scores. If only some levels are supplied, interpolate the missing
+standards between (or beyond) the anchors you have, using the rubric's
+descriptors. If NO samples are supplied, grade strictly against the rubric and
+the task requirements at a normal university standard. Never refuse to grade
+because anchors are missing, and do not invent your own standard when anchors
+exist.
 
 # SCORING
 - Score EACH rubric component out of its `max_score` (its weight on a /100
@@ -88,8 +93,9 @@ in a vacuum and do not invent your own standard.
   different scores.
 - This report is one of many. Do NOT default to a "safe" middle or uniformly
   high mark. Decide, concretely, what this report did better or worse than the
-  reference samples, and let the score reflect that — most reports are not
-  uniformly excellent. Avoid grade inflation.
+  reference samples (or the rubric's own descriptors when no samples are
+  given), and let the score reflect that — most reports are not uniformly
+  excellent. Avoid grade inflation.
 - `total` is the sum of the component scores and equals the percentage grade.
 - Judge only on the report's merits against the rubric. Your scores are a
   first pass; a separate cohort-level calibration step will adjust magnitudes,
@@ -268,11 +274,26 @@ def _build_session_context(
         "PASS": "PASS reference sample",
     }
     sample_text_parts = []
+    missing_labels = []
     for key, label in sample_labels.items():
-        body = cap_text(reference_samples.get(key, ""), config.MAX_SAMPLE_CHARS)
+        body = cap_text((reference_samples.get(key) or "").strip(), config.MAX_SAMPLE_CHARS)
         if body:
             sample_text_parts.append(f"=== {label} ===\n{body}")
-    samples_block = "\n\n".join(sample_text_parts) if sample_text_parts else "(none provided)"
+        else:
+            missing_labels.append(label.replace(" reference sample", ""))
+    if not sample_text_parts:
+        samples_block = (
+            "(none provided — grade strictly against the rubric and the task "
+            "requirements at a normal university standard)"
+        )
+    else:
+        samples_block = "\n\n".join(sample_text_parts)
+        if missing_labels:
+            samples_block += (
+                f"\n\n(No sample was provided for: {', '.join(missing_labels)}. "
+                "Interpolate those standards from the anchors above and the "
+                "rubric's descriptors.)"
+            )
 
     context = (
         "# THE TASK (assignment requirements)\n"

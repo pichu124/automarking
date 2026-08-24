@@ -1,8 +1,9 @@
 # 🎓 AI Grading Studio
 
 A course-agnostic, rubric-aligned grading web app for university professors. The
-professor uploads the **task**, the **rubric**, and **four graded reference
-samples**, then batch-uploads a whole cohort of reports. The app grades each
+professor uploads the **task**, the **rubric**, and up to **four graded
+reference samples** (each slot takes several files; any subset — or none — is
+enough to grade), then batch-uploads a whole cohort of reports. The app grades each
 report against the rubric with Claude, then applies a **Two-Pass statistical
 calibration engine** so the final cohort grades obey a target distribution, and
 exports a structured **Microsoft Word** grade report.
@@ -268,8 +269,10 @@ Then in the browser:
 0. In the **sidebar**, pick a provider (e.g. *Google Gemini · 🆓* or *Ollama ·
    🆓*) and model. Paste a key, or set the matching env var in `.env`.
 1. **New Grading Session** and name the assignment.
-2. Upload the **Task**, the **Rubric**, and the four **reference samples**
-   (High Distinction, Distinction, Average, Pass), then **Structure rubric**.
+2. Upload the **Task**, the **Rubric**, and the **reference samples**
+   (High Distinction, Distinction, Average, Pass — all optional; a slot can
+   hold several files, e.g. a Word report plus its Excel workbook), then
+   **Structure rubric**.
 3. **Batch-upload** all student reports (or one `.zip`).
 4. **Run Two-Pass Grading** — review the calibrated cohort.
 5. **Download** the `.docx` grade report.
