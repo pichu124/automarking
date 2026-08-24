@@ -100,3 +100,23 @@ def test_uploads_text_concatenates_and_labels_files(monkeypatch):
     assert "text of calcs.xlsx" in merged
 
     assert app._uploads_text([]) == ""
+
+
+# --- Grade-safe wording: the persona must never teach praise-rating ----------
+
+def test_persona_uses_describe_not_rate_wording():
+    from src.prompts import GRADING_SYSTEM_PROMPT, build_grading_user_message
+
+    assert "GRADE-SAFE WORDING" in GRADING_SYSTEM_PROMPT
+    assert "ACKNOWLEDGE BY DESCRIBING, NOT RATING" in GRADING_SYSTEM_PROMPT
+    # The old tone examples taught exactly the phrasing students appeal with.
+    assert "Good work overall" not in GRADING_SYSTEM_PROMPT
+    assert "Very good identification" not in GRADING_SYSTEM_PROMPT
+    # Praise vocabulary is explicitly gated to top-of-range components
+    # (normalise whitespace: the phrase wraps across lines in the prompt).
+    flat = " ".join(GRADING_SYSTEM_PROMPT.split())
+    assert "at the very top of its range" in flat
+    # And the per-request reminder reinforces it (persona rules alone proved
+    # unreliable until repeated per request - see the Q-accounting history).
+    msg = build_grading_user_message("s1_report.docx", "body")
+    assert "not " in msg and "rating it" in msg
