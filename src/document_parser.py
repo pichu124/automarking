@@ -476,18 +476,30 @@ def _group_key(name: str) -> tuple:
     return ("stem", key)
 
 
-def group_by_student(
-    docs: List[ParsedDocument], enabled: bool = True
-) -> List[ParsedDocument]:
-    """Merge files that belong to the same student into one submission.
+def _primary_member(members: List[ParsedDocument]) -> ParsedDocument:
+    return next(
+        (m for m in members if m.name.lower().endswith((".docx", ".pdf"))),
+        members[0],
+    )
 
-    The primary (Word/PDF) file's name labels the group and its text comes
-    first, so if a length cap ever trims the combined text it is the auxiliary
-    spreadsheets that get shortened, not the write-up.
-    """
-    if not enabled:
-        return list(docs)
 
+def _merge_members(members: List[ParsedDocument]) -> ParsedDocument:
+    """One submission from a group's files: the primary (Word/PDF) file's name
+    labels the group and its text comes first, so if a length cap ever trims
+    the combined text it is the auxiliary spreadsheets that get shortened, not
+    the write-up."""
+    if len(members) == 1:
+        return members[0]
+    primary = _primary_member(members)
+    ordered = [primary] + [m for m in members if m is not primary]
+    text = "\n\n".join(
+        f"=== File: {m.name} ===\n{m.text.strip()}" for m in ordered
+    )
+    return ParsedDocument(f"{primary.name} [+{len(members) - 1} file(s)]", text)
+
+
+def _auto_keys(docs: List[ParsedDocument]) -> List[tuple]:
+    """The automatic group key for each doc, aligned with the input order."""
     # LMS (Moodle/Canvas) zips give each student their own folder holding a
     # couple of generically named files. For ID-less files, a small folder
     # (<= 4 files) is treated as one student's submission; big folders (a
@@ -500,32 +512,74 @@ def group_by_student(
     for doc in docs:
         folder_counts[_folder(doc.name)] = folder_counts.get(_folder(doc.name), 0) + 1
 
-    groups: dict = {}
-    order: List[tuple] = []
+    keys: List[tuple] = []
     for doc in docs:
         key = _group_key(doc.name)
         folder = _folder(doc.name)
         if key[0] == "stem" and folder and folder_counts.get(folder, 0) <= 4:
             key = ("folder", folder)
+        keys.append(key)
+    return keys
+
+
+def _partition(docs: List[ParsedDocument], keys: List[tuple]) -> List[List[ParsedDocument]]:
+    groups: dict = {}
+    order: List[tuple] = []
+    for doc, key in zip(docs, keys):
         if key not in groups:
             groups[key] = []
             order.append(key)
         groups[key].append(doc)
+    return [groups[key] for key in order]
 
-    merged: List[ParsedDocument] = []
-    for key in order:
-        members = groups[key]
-        if len(members) == 1:
-            merged.append(members[0])
-            continue
-        primary = next(
-            (m for m in members if m.name.lower().endswith((".docx", ".pdf"))),
-            members[0],
-        )
-        ordered = [primary] + [m for m in members if m is not primary]
-        text = "\n\n".join(
-            f"=== File: {m.name} ===\n{m.text.strip()}" for m in ordered
-        )
-        label = f"{primary.name} [+{len(members) - 1} file(s)]"
-        merged.append(ParsedDocument(label, text))
-    return merged
+
+def group_by_student(
+    docs: List[ParsedDocument], enabled: bool = True
+) -> List[ParsedDocument]:
+    """Merge files that belong to the same student into one submission."""
+    if not enabled:
+        return list(docs)
+    return [_merge_members(m) for m in _partition(docs, _auto_keys(docs))]
+
+
+def auto_group_labels(
+    docs: List[ParsedDocument], enabled: bool = True
+) -> dict[str, str]:
+    """A human-editable group label per file name.
+
+    The labels induce the SAME partition as ``group_by_student`` (each auto
+    group gets one label, unique across groups), so they can prefill a manual
+    grouping editor: the professor merges two groups by simply giving their
+    rows the same label. Labels are the primary member's filename stem —
+    short, recognisable, and natural to type (e.g. "Team 7").
+    """
+    keys = (
+        _auto_keys(docs) if enabled else [("file", i) for i in range(len(docs))]
+    )
+    labels: dict[str, str] = {}
+    used: dict[str, int] = {}
+    for members in _partition(docs, keys):
+        primary = _primary_member(members)
+        base = primary.name.replace("\\", "/").rpartition("/")[2]
+        base = base.rsplit(".", 1)[0].strip() or primary.name
+        n = used.get(base.lower(), 0) + 1
+        used[base.lower()] = n
+        label = base if n == 1 else f"{base} ({n})"
+        for m in members:
+            labels[m.name] = label
+    return labels
+
+
+def group_by_labels(
+    docs: List[ParsedDocument], labels: dict[str, str]
+) -> List[ParsedDocument]:
+    """Merge files that share the same (professor-assigned) group label.
+
+    Label matching is case-insensitive, so hand-typed "team 7" joins
+    "Team 7". A file with an empty/missing label stays its own submission.
+    """
+    keys: List[tuple] = []
+    for i, doc in enumerate(docs):
+        label = (labels.get(doc.name) or "").strip()
+        keys.append(("label", label.lower()) if label else ("single", i))
+    return [_merge_members(m) for m in _partition(docs, keys)]

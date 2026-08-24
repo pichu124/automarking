@@ -98,6 +98,57 @@ def test_read_failure_reason_is_surfaced():
     assert read_failure_reason("healthy essay text") is None
 
 
+def test_manual_grouping_merges_a_teams_differently_named_files():
+    from src.document_parser import auto_group_labels, group_by_labels
+
+    # The real case: Team 7's three files have three different name stems, so
+    # auto-grouping keeps them apart (11 groups from 7 teams).
+    docs = [
+        ParsedDocument("TradeNotesTeam 7.csv", "trade notes"),
+        ParsedDocument("ClosePosition_Team 7.csv", "close positions"),
+        ParsedDocument("Team 7.docx", "the write-up"),
+        ParsedDocument("Team 6.docx", "team 6 report"),
+        ParsedDocument("Team 6.xlsx", "team 6 workbook"),
+    ]
+    labels = auto_group_labels(docs)
+    # Auto labels induce the auto partition: Team 6's pair shares one label...
+    assert labels["Team 6.docx"] == labels["Team 6.xlsx"]
+    # ...while Team 7's three files start out split.
+    assert len({labels[d.name] for d in docs[:3]}) == 3
+
+    # The professor types the same label on Team 7's rows (case-insensitive).
+    labels["TradeNotesTeam 7.csv"] = "team 7"
+    labels["ClosePosition_Team 7.csv"] = "Team 7"
+    labels["Team 7.docx"] = "Team 7"
+    merged = group_by_labels(docs, labels)
+    assert len(merged) == 2
+    team7 = next(m for m in merged if "Team 7.docx" in m.name)
+    assert "[+2 file(s)]" in team7.name          # docx is the primary label
+    assert team7.text.index("the write-up") < team7.text.index("trade notes")
+
+
+def test_group_labels_empty_label_keeps_file_separate():
+    from src.document_parser import group_by_labels
+
+    docs = [ParsedDocument("a.docx", "a"), ParsedDocument("b.docx", "b")]
+    merged = group_by_labels(docs, {"a.docx": "", "b.docx": ""})
+    assert len(merged) == 2
+
+
+def test_auto_labels_stay_unique_for_identically_named_groups():
+    from src.document_parser import auto_group_labels, group_by_labels
+
+    # Two students' folders both hold "report.docx" — their labels must NOT
+    # collide, or the manual editor would merge two strangers by default.
+    docs = [
+        ParsedDocument("Alice Smith_1234/report.docx", "alice"),
+        ParsedDocument("Bob Jones_5678/report.docx", "bob"),
+    ]
+    labels = auto_group_labels(docs)
+    assert labels["Alice Smith_1234/report.docx"] != labels["Bob Jones_5678/report.docx"]
+    assert len(group_by_labels(docs, labels)) == 2
+
+
 def test_student_id_never_matches_inside_a_word():
     docs = [
         ParsedDocument("Alice Nguyen - Results20230815.docx", "alice's essay"),

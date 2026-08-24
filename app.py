@@ -32,7 +32,8 @@ from src.docx_export import build_grade_document, sanitize_text
 from src.document_parser import (
     HEALTH_HINTS,
     ParsedDocument,
-    group_by_student,
+    auto_group_labels,
+    group_by_labels,
     parse_upload,
     read_failure_reason,
     text_health,
@@ -408,6 +409,7 @@ def sidebar() -> None:
                 "_rubric_file_id", "_rubric_file_id_shadow",
                 "_marker_file_id", "_marker_file_id_shadow",
                 "_batch_ids", "_batch_raw", "_raw_file_count",
+                "manual_groups", "_group_editor_nonce",
                 *(f"_ref_{k}_ids" for k, _ in REFERENCE_KEYS),
             ):
                 st.session_state.pop(key, None)
@@ -630,7 +632,8 @@ def batch_ui() -> None:
         help="Files are grouped by the student ID in the filename (e.g. "
              "s4180007); files without an ID pair up when their names match "
              "apart from the extension. Verify the grouping below before "
-             "grading.",
+             "grading — and fix any mis-grouped files in ✏️ Adjust grouping "
+             "manually.",
     )
     # Parse once per upload set; removing EVERY file clears the cohort too —
     # otherwise deleted reports would silently stay queued for grading.
@@ -645,9 +648,61 @@ def batch_ui() -> None:
     elif st.session_state.pop("_batch_ids", None) is not None:
         st.session_state["_batch_raw"] = []
     raw_docs = st.session_state.get("_batch_raw", [])
-    # Grouping is recomputed from the parsed files each run, so toggling the
-    # checkbox re-groups instantly without re-parsing.
-    st.session_state["documents"] = group_by_student(raw_docs, enabled=group_enabled)
+
+    # Grouping is recomputed from the parsed files each run (toggling the
+    # checkbox re-groups instantly without re-parsing). The professor can
+    # override the automatic grouping file-by-file: rows sharing a Group label
+    # merge into one submission.
+    auto_labels = auto_group_labels(raw_docs, enabled=group_enabled)
+    manual = {
+        k: v for k, v in (st.session_state.get("manual_groups") or {}).items()
+        if k in auto_labels
+    }
+    if raw_docs:
+        with st.expander("✏️ Adjust grouping manually", expanded=False):
+            st.caption(
+                "Auto-grouping merges files with a matching student ID or "
+                "filename — differently named files of one team (e.g. "
+                "`Team 7.docx` + `TradeNotes**Team 7**.csv`) stay separate. "
+                "To merge them, give their rows the **same Group label** "
+                "(case-insensitive). Every row with the same label becomes "
+                "ONE submission; a unique label keeps a file on its own."
+            )
+            editor_key = (
+                f"group_editor_{hash(st.session_state.get('_batch_ids', ()))}"
+                f"_{st.session_state.get('_group_editor_nonce', 0)}"
+            )
+            edited = st.data_editor(
+                [
+                    {"File": d.name, "Group": manual.get(d.name, auto_labels[d.name])}
+                    for d in raw_docs
+                ],
+                column_config={
+                    "File": st.column_config.TextColumn("File", disabled=True),
+                    "Group": st.column_config.TextColumn(
+                        "Group (same label = one submission)"
+                    ),
+                },
+                hide_index=True, use_container_width=True,
+                num_rows="fixed", key=editor_key,
+            )
+            manual = {
+                row["File"]: (row.get("Group") or "").strip()
+                for row in edited
+                if (row.get("Group") or "").strip().lower()
+                != auto_labels[row["File"]].lower()
+            }
+            st.session_state["manual_groups"] = manual
+            if manual and st.button("↩️ Reset to automatic grouping"):
+                st.session_state["manual_groups"] = {}
+                st.session_state["_group_editor_nonce"] = (
+                    st.session_state.get("_group_editor_nonce", 0) + 1
+                )
+                st.rerun()
+
+    st.session_state["documents"] = group_by_labels(
+        raw_docs, {**auto_labels, **manual}
+    )
     st.session_state["_raw_file_count"] = len(raw_docs)
     docs = st.session_state["documents"]
     if docs:
