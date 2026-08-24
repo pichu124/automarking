@@ -119,7 +119,10 @@ def calibrate_scores(
         # mean-targeting binary search are all preserved.
         if not cfg.avoid_band_boundaries:
             return s
-        g = cfg.boundary_guard
+        # A guard of exactly 1.0 would snap scores onto T-1 — the very 59/69/79
+        # this feature exists to eliminate — so the effective guard never drops
+        # below 1.5 (the snap target is then 68.5 etc., clearly inside the band).
+        g = max(cfg.boundary_guard, 1.5)
         for threshold in boundary_thresholds:
             if threshold - g <= s < threshold:
                 return threshold - g
@@ -148,7 +151,37 @@ def calibrate_scores(
                 lo = mid
             else:
                 hi = mid
-        return (lo + hi) / 2.0
+        t0 = (lo + hi) / 2.0
+        m0 = mean_for(t0)
+        if cfg.target_mean_low <= m0 <= cfg.target_mean_high:
+            return t0
+        return _refine_shift(t0)
+
+    def _refine_shift(t0: float) -> float:
+        # With boundary avoidance on, mean_for is a STEP function: whole
+        # clusters sit snapped at (threshold - guard) and then cross the
+        # threshold together, so the mean jumps. The binary search converges
+        # into such a jump and (lo+hi)/2 can land on the wrong side of it —
+        # a mean outside the target band even though a better shift exists.
+        # Scan the neighbourhood (the jump is at most ~guard wide) and keep the
+        # shift whose mean is closest to the target, preferring in-band means.
+        # Any t keeps the caps/floor/ceilings/order (they are structural), so
+        # this only ever improves the mean.
+        span = max(cfg.boundary_guard, 1.5) + 1.0
+
+        def key(t: float) -> tuple:
+            m = mean_for(t)
+            in_band = cfg.target_mean_low <= m <= cfg.target_mean_high
+            return (0 if in_band else 1, abs(m - target_mean))
+
+        best_t, best_key = t0, key(t0)
+        steps = int(span * 2 / 0.05)
+        for j in range(steps + 1):
+            cand = t0 - span + j * 0.05
+            k = key(cand)
+            if k < best_key:
+                best_t, best_key = cand, k
+        return best_t
 
     t = solve_shift()
     scores_sorted = scores_for_shift(t)
@@ -205,26 +238,58 @@ def rescale_components(
     """Rescale component scores so they sum to ``new_total`` after calibration.
 
     Each component is scaled by ``new_total / old_total`` and clamped to
-    ``[0, max_score]``; any rounding drift is absorbed by the component with
-    the most headroom so the sum matches ``new_total`` exactly. Inputs are
-    clamped first, so impossible model output (negative scores, or scores above
-    the component maximum) cannot propagate into the exported grades.
+    ``[0, max_score]``; clamping drift is then spread across the components
+    with remaining headroom so the sum matches ``new_total`` exactly (clamped
+    to what the components can hold, ``[0, sum(max_scores)]``). Inputs are
+    clamped first — and non-finite values (NaN/inf) zeroed — so impossible
+    model output cannot propagate into the exported grades.
     """
-    maxes = [float(m) for m in max_scores]
-    scores = [_clamp(float(s), 0.0, maxes[i]) for i, s in enumerate(scores)]
+    def _finite(x: float) -> float:
+        x = float(x)
+        return x if math.isfinite(x) else 0.0
+
+    maxes = [max(0.0, _finite(m)) for m in max_scores]
+    scores = [_clamp(_finite(s), 0.0, maxes[i]) for i, s in enumerate(scores)]
+    n = len(scores)
+    if n == 0:
+        return []
+    # The components can only ever hold [0, sum(maxes)] — an impossible target
+    # is clamped so no component leaves its own range.
+    target = _clamp(_finite(new_total), 0.0, sum(maxes))
+    old_total = _finite(old_total)
+
     if old_total <= 0:
         total_max = sum(maxes) or 1.0
-        out = [round(new_total * m / total_max, 1) for m in maxes]
+        out = [round(_clamp(target * m / total_max, 0.0, m), 1) for m in maxes]
     else:
-        factor = new_total / old_total
-        out = [round(_clamp(scores[i] * factor, 0.0, maxes[i]), 1) for i in range(len(scores))]
+        factor = target / old_total
+        out = [round(_clamp(scores[i] * factor, 0.0, maxes[i]), 1) for i in range(n)]
 
-    # Absorb drift into the component with the largest remaining headroom.
-    drift = round(new_total - sum(out), 1)
-    if abs(drift) >= 0.1 and out:
+    # Distribute the remaining drift across components, most headroom first.
+    # A single component may not have enough headroom to absorb it all (e.g. a
+    # dominant component already at its max when the report is curved up), so
+    # keep spreading until the sum matches the target. Because target lies in
+    # [0, sum(maxes)], the cohort as a whole always has enough headroom and the
+    # loop terminates within n passes.
+    for _ in range(n + 1):
+        drift = round(target - sum(out), 1)
+        if abs(drift) < 0.1:
+            break
         if drift > 0:
-            idx = max(range(len(out)), key=lambda i: maxes[i] - out[i])
+            order = sorted(range(n), key=lambda i: maxes[i] - out[i], reverse=True)
         else:
-            idx = max(range(len(out)), key=lambda i: out[i])
-        out[idx] = round(_clamp(out[idx] + drift, 0.0, maxes[idx]), 1)
+            order = sorted(range(n), key=lambda i: out[i], reverse=True)
+        moved = False
+        for i in order:
+            room = (maxes[i] - out[i]) if drift > 0 else out[i]
+            if room < 0.05:
+                continue
+            step = math.copysign(min(abs(drift), room), drift)
+            out[i] = round(_clamp(out[i] + step, 0.0, maxes[i]), 1)
+            moved = True
+            drift = round(target - sum(out), 1)
+            if abs(drift) < 0.1:
+                break
+        if not moved:
+            break
     return out

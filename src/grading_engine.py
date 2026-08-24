@@ -27,6 +27,7 @@ provider. The result records which one, and whether a fallback happened.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Protocol, Sequence
 
@@ -35,7 +36,7 @@ from .document_parser import ParsedDocument
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
 from . import config
 from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user
-from .providers import build_provider
+from .providers import ModelOutputError, build_provider
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -148,6 +149,12 @@ def _is_provider_unhealthy(exc: Exception) -> bool:
     connection errors qualify; a plain validation / JSON-parse error does not
     (that's a per-report content issue).
     """
+    # A ModelOutputError is by definition a per-report content failure; its
+    # message quotes the model's prose, which can coincidentally contain
+    # health-sounding words ("billing", "quota") — never treat it as a
+    # provider failure or one odd report would discard the whole cohort.
+    if isinstance(exc, ModelOutputError):
+        return False
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(exc, "status", None)
@@ -156,6 +163,13 @@ def _is_provider_unhealthy(exc: Exception) -> bool:
     blob = f"{type(exc).__name__} {exc}".lower()
     if any(tok in blob for tok in _HEALTH_NAME_TOKENS):
         return True
+    # Message-token matching is a last resort and unsafe on content-type
+    # exceptions: a ValueError (JSON parse, pydantic validation) quotes the
+    # MODEL'S OWN OUTPUT, which can innocently contain "billing"/"quota"/
+    # "api key" when the student's report happens to discuss such a topic.
+    # Real provider-health failures from the SDKs are never plain ValueErrors.
+    if isinstance(exc, ValueError):
+        return False
     return any(tok in blob for tok in _HEALTH_MESSAGE_TOKENS)
 
 
@@ -191,6 +205,13 @@ def _grade_pass1(
                 report_text=doc.text,
                 marker_materials=session.marker_materials,
             )
+            if not graded.components:
+                # Nothing to grade against — recording an error is honest;
+                # letting it through would invent a grade from the calibration
+                # floor for a report with an EMPTY component table.
+                raise ModelOutputError(
+                    "model returned no component grades for this report"
+                )
             raw_results.append((doc.name, graded))
         except Exception as exc:
             if raise_on_unhealthy and _is_provider_unhealthy(exc):
@@ -201,15 +222,26 @@ def _grade_pass1(
     return raw_results, errors
 
 
+def _finite(x: float) -> float:
+    """A float, with NaN/inf zeroed — every comparison against NaN is False,
+    so an unguarded clamp would silently turn a NaN score into full marks."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return 0.0
+    return x if math.isfinite(x) else 0.0
+
+
 def _sane_component_scores(graded: GradingResult) -> List[float]:
     """Component scores clamped into [0, max_score].
 
-    Models occasionally emit impossible values (negative, or above the
-    component maximum); left unchecked these propagate into the exported
+    Models occasionally emit impossible values (negative, above the component
+    maximum, or NaN/inf); left unchecked these propagate into the exported
     grades.
     """
     return [
-        max(0.0, min(float(c.max_score), float(c.score))) for c in graded.components
+        max(0.0, min(max(0.0, _finite(c.max_score)), _finite(c.score)))
+        for c in graded.components
     ]
 
 
@@ -242,15 +274,20 @@ def _finalize(
 
     reports: List[CalibratedReport] = []
     for (source_name, graded), raw_total, final_total in zip(raw_results, raw_totals, final_totals):
-        max_scores = [float(c.max_score) for c in graded.components]
+        max_scores = [max(0.0, _finite(c.max_score)) for c in graded.components]
         scores = _sane_component_scores(graded)
         # A calibrated total can only be distributed across the components that
         # exist; if the model returned a partial rubric (component maxima
         # summing to less than 100) the report is capped at what it can hold,
-        # so the printed components always add up to the printed total.
-        if max_scores:
-            final_total = min(final_total, sum(max_scores))
-        new_scores = rescale_components(scores, max_scores, raw_total, final_total)
+        # so the printed components always add up to the printed total. (With
+        # no components at all — only possible via stored raw_grades from an
+        # older version — the cap correctly forces the total to 0.)
+        final_total = min(final_total, sum(max_scores))
+        # Rescale from the ACTUAL component sum, not the 100-clamped raw total:
+        # if a model invented extra components whose maxima sum above 100, the
+        # two disagree and the printed table would not add up to the total.
+        old_total = sum(scores) if scores else raw_total
+        new_scores = rescale_components(scores, max_scores, old_total, final_total)
         components = [
             ComponentGrade(
                 name=c.name,
@@ -466,4 +503,4 @@ def recalibrate(
 
 
 def _clamp_total(total: float) -> float:
-    return max(0.0, min(100.0, float(total)))
+    return max(0.0, min(100.0, _finite(total)))

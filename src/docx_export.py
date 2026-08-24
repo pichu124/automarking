@@ -156,8 +156,17 @@ def _set_fixed_widths(table, widths) -> None:
 
 
 def _add_student_section(doc: Document, report: CalibratedReport) -> None:
-    heading = doc.add_heading(sanitize_text(report.student_identifier), level=1)
-    heading.runs[0].font.color.rgb = RGBColor.from_string(_HEADER_FILL)
+    # A fully non-Latin identifier (Chinese/Arabic/emoji) sanitises to "";
+    # fall back to the source filename so the section keeps its identity —
+    # an empty heading has no runs and styling it would crash the export.
+    name = (
+        sanitize_text(report.student_identifier)
+        or sanitize_text(report.source_name)
+        or "(unnamed student)"
+    )
+    heading = doc.add_heading(name, level=1)
+    if heading.runs:
+        heading.runs[0].font.color.rgb = RGBColor.from_string(_HEADER_FILL)
 
     meta = doc.add_paragraph()
     meta.add_run("Source: ").bold = True

@@ -119,6 +119,16 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
 
 # --- JSON helpers ----------------------------------------------------------
 
+class ModelOutputError(ValueError):
+    """The model produced unusable output for ONE report.
+
+    A distinct type so the fallback engine can classify it as a per-report
+    content error no matter what the message contains — the message embeds the
+    model's own prose, which could coincidentally include health-sounding words
+    ("billing", "quota") when the student's report is about such a topic.
+    """
+
+
 def _extract_json(text: str) -> dict:
     """Pull a JSON object out of a model response, tolerating local-model quirks.
 
@@ -127,7 +137,7 @@ def _extract_json(text: str) -> dict:
     JSON first, then progressively repair before giving up.
     """
     if text is None:
-        raise ValueError("empty model response")
+        raise ModelOutputError("empty model response")
     cleaned = text.strip()
     if cleaned.startswith("```"):
         # drop the opening fence (``` or ```json) and the closing fence
@@ -157,7 +167,7 @@ def _extract_json(text: str) -> dict:
             return result
     except Exception:
         pass
-    raise ValueError(
+    raise ModelOutputError(
         "Model did not return valid JSON. First 200 chars: " + cleaned[:200]
     )
 

@@ -12,9 +12,10 @@ import math
 from dataclasses import dataclass
 from typing import List, Sequence
 
+from . import config
 from .config import DEFAULT_PRICING, PROVIDER_PRICING, ModelPricing
 from .document_parser import ParsedDocument
-from .prompts import build_grading_system_text
+from .prompts import build_grading_system_text, cap_text
 
 # Rough average across English prose + code; good enough for an estimate.
 CHARS_PER_TOKEN = 4.0
@@ -92,7 +93,12 @@ def estimate_batch(
     n = len(report_texts)
 
     static_tokens = estimate_tokens(static_context_text)
-    report_tokens = [estimate_tokens(t) for t in report_texts]
+    # Count what each request actually SENDS: reports are capped by the same
+    # length limit the grading prompt applies (the static half above is built
+    # through build_grading_system_text, which already applies its caps).
+    report_tokens = [
+        estimate_tokens(cap_text(t, config.MAX_REPORT_CHARS)) for t in report_texts
+    ]
     variable_input = sum(report_tokens) + USER_WRAPPER_TOKENS * n
     out_per = _estimate_output_tokens(n_components)
     output_tokens = out_per * n

@@ -18,7 +18,11 @@ from pypdf import PdfReader
 
 
 _TEXT_EXTS = (".txt", ".md", ".csv")
-_SKIP_PREFIXES = ("__MACOSX/", ".")
+# Archiver junk to skip inside zips. Hidden dotfiles (.DS_Store) are matched on
+# the BASENAME where members are read — a leading "./" or "../" on an otherwise
+# normal path is not junk (tar-to-zip converters emit those) and must not cause
+# the member to be silently dropped.
+_SKIP_PREFIXES = ("__MACOSX/",)
 
 
 @dataclass
@@ -89,12 +93,23 @@ def _read_pdf(data: bytes) -> str:
 
 def _read_text(data: bytes) -> str:
     """Decode text robustly: Excel-exported CSVs are often UTF-8-with-BOM,
-    UTF-16 or cp1252 rather than plain UTF-8."""
+    UTF-16 (with or without a BOM) or cp1252 rather than plain UTF-8."""
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         try:
             return data.decode("utf-16")
         except UnicodeError:
             pass
+    # UTF-16 WITHOUT a BOM decodes as "valid" UTF-8/cp1252 (NUL bytes are legal
+    # there), yielding N-U-L-interleaved mojibake. NULs never appear in real
+    # text, so their presence means: try UTF-16 first.
+    if b"\x00" in data:
+        for encoding in ("utf-16-le", "utf-16-be"):
+            try:
+                candidate = data.decode(encoding)
+            except UnicodeError:
+                continue
+            if "\x00" not in candidate and not _looks_binary(candidate):
+                return candidate
     for encoding in ("utf-8-sig", "cp1252"):
         try:
             return data.decode(encoding)
@@ -272,7 +287,12 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     """Parse one uploaded file. A .zip expands to multiple ParsedDocuments."""
     lowered = name.lower()
     if lowered.endswith(".zip"):
-        return _parse_zip(data)
+        try:
+            return _parse_zip(data)
+        except Exception as exc:
+            # A truncated download or a non-zip renamed .zip raises BadZipFile
+            # — surface a loud placeholder instead of crashing the app.
+            return [ParsedDocument(name, f"[Could not read {name}: {exc}]")]
 
     # A standalone image (e.g. a screenshot submitted as its own file) has no
     # extractable text — surface an explicit note instead of binary garbage, so
@@ -300,6 +320,17 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
             text = note + _read_xls(data)
         elif lowered.endswith(_TEXT_EXTS):
             text = _read_text(data)
+            if _looks_binary(text):
+                # A renamed binary (a real .xls saved as .csv is a common user
+                # mistake) or an undetectable encoding — fail loudly rather
+                # than feeding the model garbage that LOOKS like content.
+                text = (
+                    f"[Could not read {name}: the file decodes to binary "
+                    "garbage, not text. It may be a renamed binary file "
+                    "(e.g. a real Excel workbook saved with a .csv name) or "
+                    "use an unsupported encoding - re-export it as CSV/text "
+                    "or upload the original format.]"
+                )
         else:
             # Unknown extension: best-effort decode, but never feed the model
             # silent mojibake from an unsupported binary format.
@@ -325,12 +356,17 @@ def _parse_zip(data: bytes) -> List[ParsedDocument]:
             base = info.filename.rsplit("/", 1)[-1]
             if info.filename.startswith(_SKIP_PREFIXES) or base.startswith("."):
                 continue
-            inner = zf.read(info)
+            # Normalise "./" and "../" prefixes instead of dropping the member
+            # — nothing is extracted to disk, so the name is only a label.
+            member_name = re.sub(r"^(\.\.?/)+", "", info.filename) or base
             try:
-                out.extend(parse_bytes(info.filename, inner))
-            except Exception as exc:  # one bad file shouldn't sink the batch
+                # zf.read is inside the try: an encrypted member raises
+                # RuntimeError, and one bad file must not sink the batch.
+                inner = zf.read(info)
+                out.extend(parse_bytes(member_name, inner))
+            except Exception as exc:
                 out.append(
-                    ParsedDocument(info.filename, f"[Could not read file: {exc}]")
+                    ParsedDocument(member_name, f"[Could not read file: {exc}]")
                 )
     return out
 
@@ -369,6 +405,10 @@ def text_health(text: str) -> str | None:
     for pattern in _ANNOTATION_RES:
         body = pattern.sub("", body)
     body = body.strip()
+    # Volume alone is not health: mojibake (wrong encoding, renamed binary)
+    # easily clears 300 chars but is ungradable — flag it, never bless it.
+    if _looks_binary(body):
+        return "read-failed"
     if len(body) >= 300:
         return None
     if "[Could not read" in raw:
@@ -395,7 +435,10 @@ HEALTH_HINTS = {
 # Group by student ID in the filename (e.g. s4180007); files without an ID
 # group by their normalised filename stem, so "X.docx" pairs with "X.xlsx".
 
-_STUDENT_ID_RE = re.compile(r"[sS](\d{6,8})")
+# The lookbehind stops the trailing "s" of ordinary words matching ("Results"
+# + a yyyymmdd date would otherwise read as a student ID and merge two
+# different students whose filenames share the date).
+_STUDENT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS](\d{6,8})")
 
 
 def _group_key(name: str) -> tuple:

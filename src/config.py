@@ -39,6 +39,13 @@ MAX_TASK_CHARS = 16000         # ≈ 4k tokens
 MAX_RUBRIC_CHARS = 16000       # ≈ 4k tokens
 MAX_SAMPLE_CHARS = 24000       # per reference sample, ≈ 6k tokens (~3,700 words)
 MAX_REPORT_CHARS = 40000       # per student report, ≈ 10k tokens (~6,000 words)
+
+# Immutable copies of the two caps the sidebar overrides at runtime. The UI
+# mutates MAX_REPORT_CHARS/MAX_SAMPLE_CHARS on this (process-cached) module, so
+# anything that needs the factory default — e.g. a new browser session's UI
+# defaults — must read these, never the mutable names above.
+BASE_MAX_REPORT_CHARS = MAX_REPORT_CHARS
+BASE_MAX_SAMPLE_CHARS = MAX_SAMPLE_CHARS
 # Marker-only materials (answer key + marking notes). Static per session, so it
 # sits in the cached prefix — generous cap is cheap after the first request.
 MAX_MARKER_CHARS = 80000       # ≈ 20k tokens

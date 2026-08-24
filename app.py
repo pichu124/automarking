@@ -11,6 +11,7 @@ Workflow:
 """
 from __future__ import annotations
 
+import hashlib
 import os
 
 import streamlit as st
@@ -21,9 +22,12 @@ import dataclasses
 from src import config
 from src.config import DEFAULT_CALIBRATION, DEFAULT_EFFORT, PROVIDER_PRICING
 
-# Baseline caps captured before any runtime override (used as UI defaults).
-_BASE_REPORT_CAP = config.MAX_REPORT_CHARS
-_BASE_SAMPLE_CAP = config.MAX_SAMPLE_CHARS
+# Factory-default caps for the UI. Read from the immutable BASE_* constants:
+# the sidebar mutates config.MAX_*, and app.py re-executes on every rerun, so
+# capturing the mutable names here would leak one session's override into the
+# next session's defaults.
+_BASE_REPORT_CAP = config.BASE_MAX_REPORT_CHARS
+_BASE_SAMPLE_CAP = config.BASE_MAX_SAMPLE_CHARS
 from src.docx_export import build_grade_document, sanitize_text
 from src.document_parser import (
     HEALTH_HINTS,
@@ -102,12 +106,20 @@ def _read_uploaded_once(uploaded, text_key: str, file_id_key: str) -> None:
     """Read an uploaded file into session state exactly once per upload.
 
     Reading only when the file id changes means a later manual paste into the
-    text area is not clobbered on every Streamlit rerun.
+    text area is not clobbered on every Streamlit rerun. Removing the file
+    clears the text again — unless the user edited it by hand since.
     """
+    shadow_key = file_id_key + "_shadow"
     if uploaded is None:
+        if st.session_state.pop(file_id_key, None) is not None:
+            if st.session_state.get(text_key, "") == st.session_state.get(shadow_key, ""):
+                st.session_state[text_key] = ""
+            st.session_state.pop(shadow_key, None)
         return
     if st.session_state.get(file_id_key) != uploaded.file_id:
-        st.session_state[text_key] = _first_text(uploaded)
+        text = _first_text(uploaded)
+        st.session_state[text_key] = text
+        st.session_state[shadow_key] = text
         st.session_state[file_id_key] = uploaded.file_id
 
 
@@ -117,13 +129,23 @@ def _read_uploads_once(uploads, text_key: str, ids_key: str) -> None:
     Re-reads only when the set of files changes (add/remove), so manual edits
     in the text area survive Streamlit reruns. With more than one document the
     pieces are labelled with their filename so the model can tell them apart.
+    Removing every file clears the text again — unless the user has edited it
+    by hand since the upload (their edits win; a shadow copy of the last
+    upload-produced text tells the two apart).
     """
+    shadow_key = ids_key + "_shadow"
     if not uploads:
+        if st.session_state.pop(ids_key, None) is not None:
+            if st.session_state.get(text_key, "") == st.session_state.get(shadow_key, ""):
+                st.session_state[text_key] = ""
+            st.session_state.pop(shadow_key, None)
         return
     ids = tuple(u.file_id for u in uploads)
     if st.session_state.get(ids_key) == ids:
         return
-    st.session_state[text_key] = _uploads_text(uploads)
+    text = _uploads_text(uploads)
+    st.session_state[text_key] = text
+    st.session_state[shadow_key] = text
     st.session_state[ids_key] = ids
 
 
@@ -211,13 +233,17 @@ def sidebar() -> None:
             tag = " · 🆓" if p.free else ""
             return f"{p.label}{tag}"
 
+        # NOTE (applies to every widget below): widgets that feed their own
+        # return value back through `value=`/`index=` WITHOUT a key get their
+        # widget ID derived from that value — so the ID changes after an edit
+        # and the NEXT edit is silently dropped. Stable `key=` + seeded session
+        # state is the correct pattern.
+        st.session_state.setdefault("provider_key", "anthropic")
         provider_key = st.selectbox(
-            "Grading engine", keys, format_func=_fmt,
-            index=keys.index(st.session_state.get("provider_key", "anthropic")),
+            "Grading engine", keys, format_func=_fmt, key="provider_key",
             help="Anthropic is paid. Gemini & Groq have free tiers; Ollama is "
                  "fully free and runs locally.",
         )
-        st.session_state["provider_key"] = provider_key
         preset = PROVIDER_PRESETS[provider_key]
         if preset.note:
             st.caption(preset.note)
@@ -235,7 +261,7 @@ def sidebar() -> None:
         if st.session_state.get("_model_for") != provider_key:
             st.session_state["model"] = preset.default_model
             st.session_state["_model_for"] = provider_key
-        st.session_state["model"] = st.text_input("Model", value=st.session_state.get("model", ""))
+        st.text_input("Model", key="model")
 
         # API key — defaults to the relevant env var; hidden input to override.
         env_key = os.getenv(preset.api_key_env) if preset.api_key_env else None
@@ -247,8 +273,9 @@ def sidebar() -> None:
             st.session_state["api_key"] = ""
         else:
             label = f"{preset.api_key_env or 'API key'}"
-            st.session_state["api_key"] = st.text_input(
-                label, type="password", value=st.session_state.get("api_key", ""),
+            st.session_state.setdefault("api_key", "")
+            st.text_input(
+                label, type="password", key="api_key",
                 help="Or set it in your environment / .env file.",
             )
             if preset.api_key_env and not st.session_state["api_key"]:
@@ -256,8 +283,9 @@ def sidebar() -> None:
 
         # Base URL — only for custom endpoints.
         if provider_key == "custom":
-            st.session_state["base_url"] = st.text_input(
-                "Base URL", value=st.session_state.get("base_url", ""),
+            st.session_state.setdefault("base_url", "")
+            st.text_input(
+                "Base URL", key="base_url",
                 placeholder="https://your-endpoint/v1",
             )
         else:
@@ -265,13 +293,14 @@ def sidebar() -> None:
 
         # Generation controls differ by kind.
         if preset.kind == "anthropic":
-            st.session_state["effort"] = st.select_slider(
-                "Effort", options=["low", "medium", "high", "max"],
-                value=st.session_state.get("effort", DEFAULT_EFFORT),
+            st.session_state.setdefault("effort", DEFAULT_EFFORT)
+            st.select_slider(
+                "Effort", options=["low", "medium", "high", "max"], key="effort",
             )
         else:
-            st.session_state["temperature"] = st.slider(
-                "Temperature", 0.0, 1.0, st.session_state.get("temperature", 0.2), 0.05,
+            st.session_state.setdefault("temperature", 0.2)
+            st.slider(
+                "Temperature", 0.0, 1.0, step=0.05, key="temperature",
                 help="Lower = more consistent grading.",
             )
 
@@ -286,10 +315,13 @@ def sidebar() -> None:
         candidates = [k for k in PROVIDER_PRESETS if k != provider_key and k != "custom"]
         usable = [k for k in candidates if preset_is_usable(k)[0]]
         unusable = [k for k in candidates if not preset_is_usable(k)[0]]
-        st.session_state["fallback_keys"] = st.multiselect(
+        st.session_state["fallback_keys"] = [
+            k for k in st.session_state.get("fallback_keys", []) if k in usable
+        ]
+        st.multiselect(
             "Fallback providers (in order)",
             options=usable,
-            default=[k for k in st.session_state.get("fallback_keys", []) if k in usable],
+            key="fallback_keys",
             format_func=lambda k: PROVIDER_PRESETS[k].label
             + (" · 🆓" if PROVIDER_PRESETS[k].free else ""),
             help="Only providers with a key already in your environment (or "
@@ -310,24 +342,22 @@ def sidebar() -> None:
         # --- How much of each document to send ---------------------------
         st.divider()
         st.subheader("📏 Document length")
+        st.session_state.setdefault("report_cap", _BASE_REPORT_CAP)
+        st.session_state.setdefault("sample_cap", _BASE_SAMPLE_CAP)
         report_cap = st.number_input(
             "Student report — max characters (0 = full)",
-            min_value=0, max_value=400_000,
-            value=int(st.session_state.get("report_cap", _BASE_REPORT_CAP)), step=2000,
+            min_value=0, max_value=400_000, step=2000, key="report_cap",
             help="The work being graded — keep this HIGH so the model reads the "
                  "whole report. A 2,500-word report is ~16,000 chars.",
         )
         sample_cap = st.number_input(
             "Each reference sample — max characters (0 = full)",
-            min_value=0, max_value=400_000,
-            value=int(st.session_state.get("sample_cap", _BASE_SAMPLE_CAP)), step=2000,
+            min_value=0, max_value=400_000, step=2000, key="sample_cap",
             help="Samples are calibration anchors — an excerpt is enough. LOWER "
                  "this first to shrink each request (biggest lever for small "
                  "contexts like Ollama). Every provided sample is sent every "
                  "request.",
         )
-        st.session_state["report_cap"] = report_cap
-        st.session_state["sample_cap"] = sample_cap
         # Applied at runtime — prompts read these from config on each call.
         config.MAX_REPORT_CHARS = report_cap
         config.MAX_SAMPLE_CHARS = sample_cap
@@ -339,24 +369,28 @@ def sidebar() -> None:
 
         st.divider()
         st.subheader("Calibration targets")
-        st.session_state["cal_mean"] = st.slider(
-            "Target mean (%)", 55.0, 75.0, st.session_state.get("cal_mean", 65.5), 0.5
-        )
-        st.session_state["cal_hd"] = st.slider(
-            "HD cap (%)", 0, 30, st.session_state.get("cal_hd", 10), 1,
+        st.session_state.setdefault("cal_mean", 65.5)
+        st.slider("Target mean (%)", 55.0, 75.0, step=0.5, key="cal_mean")
+        st.session_state.setdefault("cal_hd", 10)
+        st.slider(
+            "HD cap (%)", 0, 30, step=1, key="cal_hd",
             help="Max % of the cohort scoring ≥ 80.",
         )
-        st.session_state["cal_di"] = st.slider(
-            "Distinction cap (%)", 0, 40, st.session_state.get("cal_di", 20), 1,
+        st.session_state.setdefault("cal_di", 20)
+        st.slider(
+            "Distinction cap (%)", 0, 40, step=1, key="cal_di",
             help="Max % of the cohort scoring 70–79.",
         )
-        st.session_state["cal_avoid"] = st.checkbox(
-            "Avoid boundary scores (59/69/79)",
-            value=st.session_state.get("cal_avoid", True),
-        )
+        st.session_state.setdefault("cal_avoid", True)
+        st.checkbox("Avoid boundary scores (59/69/79)", key="cal_avoid")
         if st.session_state["cal_avoid"]:
-            st.session_state["cal_guard"] = st.slider(
-                "Boundary buffer", 1.0, 3.0, st.session_state.get("cal_guard", 1.5), 0.5,
+            # Minimum 1.5: a buffer of 1.0 would push scores onto exactly
+            # 59/69/79 — the very scores the feature avoids.
+            if st.session_state.get("cal_guard", 1.5) < 1.5:
+                st.session_state["cal_guard"] = 1.5
+            st.session_state.setdefault("cal_guard", 1.5)
+            st.slider(
+                "Boundary buffer", 1.5, 3.0, step=0.5, key="cal_guard",
                 help="How far below each cut-off to push borderline scores "
                      "(1.5 → top of Credit becomes 68.5).",
             )
@@ -368,20 +402,34 @@ def sidebar() -> None:
             for key in (
                 "session_name", "task_text", "rubric_text",
                 "reference_samples", "components", "documents", "batch_result",
-                "marker_text", "sample_profiles", "use_profiles",
-                "_task_file_id", "_rubric_file_id", "_marker_file_id",
+                "marker_text", "sample_profiles", "use_profiles", "profile_hashes",
+                "_task_file_id", "_task_file_id_shadow",
+                "_rubric_file_id", "_rubric_file_id_shadow",
+                "_marker_file_id", "_marker_file_id_shadow",
+                "_batch_ids", "_batch_raw", "_raw_file_count",
                 *(f"_ref_{k}_ids" for k, _ in REFERENCE_KEYS),
             ):
                 st.session_state.pop(key, None)
+            # Bumping the nonce gives every file_uploader a fresh key, which is
+            # the only way to actually CLEAR uploaded files from the widgets —
+            # otherwise the old uploads re-parse right back into the session.
+            st.session_state["_uploader_nonce"] = st.session_state.get("_uploader_nonce", 0) + 1
             _init_state()
             st.rerun()
 
 
+def _up_key(name: str) -> str:
+    """File-uploader widget key, versioned by the reset nonce — giving the
+    uploaders a fresh key on 🆕 New Grading Session is the only way to
+    actually clear their files."""
+    return f"{name}_{st.session_state.get('_uploader_nonce', 0)}"
+
+
 def calibration_data_ui() -> None:
     st.header("1 · Session & Calibration Data")
-    st.session_state["session_name"] = st.text_input(
+    st.text_input(
         "Session / assignment name",
-        value=st.session_state["session_name"],
+        key="session_name",
         placeholder="e.g. ECON301 — Market Analysis Essay (S1 2026)",
     )
 
@@ -391,19 +439,21 @@ def calibration_data_ui() -> None:
         task_files = st.file_uploader(
             "Assignment requirements (you can add several files)",
             type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
-            key="task_up",
+            key=_up_key("task_up"),
             accept_multiple_files=True,
         )
         _read_uploads_once(task_files, "task_text", "_task_file_id")
-        st.session_state["task_text"] = st.text_area(
+        st.text_area(
             "Task text (you can also paste/edit here)",
-            value=st.session_state["task_text"], height=180,
+            key="task_text", height=180,
         )
 
     with col_rubric:
         st.subheader("📐 The Rubric")
         rubric_file = st.file_uploader(
-            "Grading criteria & weightings", type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"], key="rubric_up"
+            "Grading criteria & weightings",
+            type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
+            key=_up_key("rubric_up"),
         )
         _read_uploaded_once(rubric_file, "rubric_text", "_rubric_file_id")
         if rubric_file is not None and not st.session_state["rubric_text"].strip():
@@ -411,9 +461,9 @@ def calibration_data_ui() -> None:
                 "Couldn't extract text from this file (it may be scanned or laid "
                 "out in a text box). Paste the rubric text below instead."
             )
-        st.session_state["rubric_text"] = st.text_area(
+        st.text_area(
             "Rubric text (you can also paste/edit here)",
-            value=st.session_state["rubric_text"], height=180,
+            key="rubric_text", height=180,
         )
 
     st.subheader("🎯 Reference Samples (calibration anchors)")
@@ -429,7 +479,7 @@ def calibration_data_ui() -> None:
             ups = st.file_uploader(
                 label,
                 type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
-                key=f"ref_{key}",
+                key=_up_key(f"ref_{key}"),
                 accept_multiple_files=True,
             )
             _read_sample_uploads_once(key, ups)
@@ -455,7 +505,7 @@ def calibration_data_ui() -> None:
     marker_files = st.file_uploader(
         "Answer key / marking notes (you can add several files)",
         type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv"],
-        key="marker_up",
+        key=_up_key("marker_up"),
         accept_multiple_files=True,
     )
     _read_uploads_once(marker_files, "marker_text", "_marker_file_id")
@@ -524,6 +574,12 @@ def _sample_compression_ui() -> None:
                 _provider_chain(), samples, st.session_state["components"], progress_callback=cb
             )
             st.session_state["sample_profiles"] = profiles
+            # Fingerprint the sample each profile was distilled from, so a
+            # slot whose file is later replaced/added falls back to its FULL
+            # text instead of silently grading against a stale profile.
+            st.session_state["profile_hashes"] = {
+                k: _sample_fingerprint(samples.get(k, "")) for k in profiles
+            }
             st.session_state["use_profiles"] = True
             st.success(f"Compressed {len(profiles)} sample(s) with {used}.")
         except Exception as exc:
@@ -532,10 +588,23 @@ def _sample_compression_ui() -> None:
             progress.empty()
 
     if st.session_state.get("sample_profiles"):
-        st.session_state["use_profiles"] = st.checkbox(
-            "Use compact anchor profiles for grading",
-            value=st.session_state.get("use_profiles", True),
-        )
+        st.session_state.setdefault("use_profiles", True)
+        st.checkbox("Use compact anchor profiles for grading", key="use_profiles")
+        if st.session_state["use_profiles"]:
+            hashes = st.session_state.get("profile_hashes", {})
+            profiles = st.session_state["sample_profiles"]
+            changed = [
+                SAMPLE_LEVELS[k]
+                for k in SAMPLE_LEVELS
+                if (samples.get(k) or "").strip()
+                and (k not in profiles or hashes.get(k) != _sample_fingerprint(samples[k]))
+            ]
+            if changed:
+                st.info(
+                    "These samples were added or changed AFTER compression, so "
+                    "they are sent in full until you re-run **Read & compress**: "
+                    + ", ".join(changed) + "."
+                )
         with st.expander("Review anchor profiles"):
             for key, label in SAMPLE_LEVELS.items():
                 prof = st.session_state["sample_profiles"].get(key)
@@ -551,23 +620,34 @@ def batch_ui() -> None:
         "Word report and Excel workbook can be uploaded together",
         type=["pdf", "docx", "xlsx", "xlsb", "xls", "txt", "md", "csv", "png", "jpg", "jpeg", "zip"],
         accept_multiple_files=True,
-        key="batch_up",
+        key=_up_key("batch_up"),
     )
+    st.session_state.setdefault("group_by_student", True)
     group_enabled = st.checkbox(
         "Group files by student (Word + Excel of the same student become ONE submission)",
-        value=st.session_state.get("group_by_student", True),
+        key="group_by_student",
         help="Files are grouped by the student ID in the filename (e.g. "
              "s4180007); files without an ID pair up when their names match "
              "apart from the extension. Verify the grouping below before "
              "grading.",
     )
-    st.session_state["group_by_student"] = group_enabled
+    # Parse once per upload set; removing EVERY file clears the cohort too —
+    # otherwise deleted reports would silently stay queued for grading.
     if uploads:
-        raw_docs: list[ParsedDocument] = []
-        for up in uploads:
-            raw_docs.extend(parse_upload(up))
-        st.session_state["documents"] = group_by_student(raw_docs, enabled=group_enabled)
-        st.session_state["_raw_file_count"] = len(raw_docs)
+        ids = tuple(u.file_id for u in uploads)
+        if st.session_state.get("_batch_ids") != ids:
+            raw_docs: list[ParsedDocument] = []
+            for up in uploads:
+                raw_docs.extend(parse_upload(up))
+            st.session_state["_batch_raw"] = raw_docs
+            st.session_state["_batch_ids"] = ids
+    elif st.session_state.pop("_batch_ids", None) is not None:
+        st.session_state["_batch_raw"] = []
+    raw_docs = st.session_state.get("_batch_raw", [])
+    # Grouping is recomputed from the parsed files each run, so toggling the
+    # checkbox re-groups instantly without re-parsing.
+    st.session_state["documents"] = group_by_student(raw_docs, enabled=group_enabled)
+    st.session_state["_raw_file_count"] = len(raw_docs)
     docs = st.session_state["documents"]
     if docs:
         raw_n = st.session_state.get("_raw_file_count", len(docs))
@@ -597,11 +677,34 @@ def batch_ui() -> None:
                 st.write(f"• **{d.name}** — {n_files} file(s), ~{len(d.text):,} chars{flag}")
 
 
+def _sample_fingerprint(text: str) -> str:
+    return hashlib.sha1((text or "").strip().encode("utf-8", "replace")).hexdigest()
+
+
 def _effective_samples() -> dict:
-    """Use compact anchor profiles for grading when available + enabled."""
-    if st.session_state.get("use_profiles") and st.session_state.get("sample_profiles"):
-        return st.session_state["sample_profiles"]
-    return st.session_state["reference_samples"]
+    """The reference samples grading will actually use.
+
+    Always anchored to the samples currently LOADED in the slots — a deleted
+    sample never keeps grading via its leftover profile, and a sample added
+    after compression is never silently dropped. When compact profiles are
+    enabled, a slot's profile substitutes for its full text only while the
+    underlying sample is unchanged (checked via the fingerprint stored at
+    compression time); otherwise the full text is sent.
+    """
+    samples = {
+        k: v for k, v in st.session_state["reference_samples"].items()
+        if (v or "").strip()
+    }
+    if not (st.session_state.get("use_profiles") and st.session_state.get("sample_profiles")):
+        return samples
+    profiles = st.session_state["sample_profiles"]
+    hashes = st.session_state.get("profile_hashes", {})
+    return {
+        k: profiles[k]
+        if k in profiles and hashes.get(k) == _sample_fingerprint(v)
+        else v
+        for k, v in samples.items()
+    }
 
 
 def _session_from_state() -> GradingSession:
