@@ -492,3 +492,33 @@ def test_effective_samples_never_serves_stale_profiles(monkeypatch):
     # Replacing the HD file invalidates its fingerprint -> full text again.
     st.session_state["reference_samples"]["HD"] = "REPLACED HD text"
     assert app._effective_samples()["HD"] == "REPLACED HD text"
+
+
+def test_docx_with_dangling_image_relationship_still_reads():
+    # A bad edit/repair can leave a relationship pointing at a deleted image
+    # ("There is no item named 'word/media/image4.png' in the archive").
+    # python-docx refuses the whole package; the XML fallback must recover
+    # the intact document text instead of failing the submission.
+    import docx as docx_lib
+
+    src = io.BytesIO()
+    d = docx_lib.Document()
+    d.add_paragraph("The student's actual answer text survives the broken rel.")
+    d.save(src)
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(src.getvalue())) as zin, zipfile.ZipFile(out, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/_rels/document.xml.rels":
+                data = data.replace(
+                    b"</Relationships>",
+                    b'<Relationship Id="rIdGhost" Type="http://schemas.openxmlformats.org/'
+                    b'officeDocument/2006/relationships/image" Target="media/image4.png"/>'
+                    b"</Relationships>",
+                )
+            zout.writestr(item, data)
+
+    text = parse_bytes("broken_rel.docx", out.getvalue())[0].text
+    assert "actual answer text survives" in text
+    assert "[Could not read" not in text

@@ -32,20 +32,28 @@ class ParsedDocument:
 
 
 def _read_docx(data: bytes) -> str:
-    document = docx.Document(io.BytesIO(data))
-    parts: List[str] = [p.text for p in document.paragraphs if p.text.strip()]
-    # Include simple table text — rubrics and grade sheets are often tables.
-    for table in document.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells]
-            if any(cells):
-                parts.append(" | ".join(cells))
-    text = "\n".join(parts)
+    try:
+        document = docx.Document(io.BytesIO(data))
+        parts: List[str] = [p.text for p in document.paragraphs if p.text.strip()]
+        # Include simple table text — rubrics and grade sheets are often tables.
+        for table in document.tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells]
+                if any(cells):
+                    parts.append(" | ".join(cells))
+        text = "\n".join(parts)
+    except Exception:
+        # python-docx refuses slightly-broken packages outright — e.g. a
+        # dangling relationship to a deleted image ("There is no item named
+        # 'word/media/imageN.png' in the archive") after a bad edit/repair.
+        # The document text itself is intact in word/document.xml, so fall
+        # through to the raw-XML reader instead of failing the submission.
+        text = ""
     if text.strip():
         return text
     # Fallback: python-docx's paragraph/table API misses text boxes, shapes,
-    # headers and footers. Pull text straight from the docx XML so rubrics laid
-    # out in a text box still come through.
+    # headers and footers (and refuses broken-relationship packages). Pull
+    # text straight from the docx XML so the content still comes through.
     return _docx_xml_text(data)
 
 
