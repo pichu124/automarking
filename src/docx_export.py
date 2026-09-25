@@ -117,7 +117,8 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
     row("Reports graded", str(calib.n))
     row("Calibrated mean", f"{calib.final_mean:.2f}%  (raw {calib.raw_mean:.2f}%)")
     row("High Distinction (>=80%)", f"{calib.hd_count}  (cap {calib.hd_cap})")
-    row("Distinction (70-79%)", f"{calib.di_count}  (cap {calib.di_cap})")
+    widened = " - widened, no HD in cohort" if getattr(calib, "di_cap_widened", False) else ""
+    row("Distinction (70-79%)", f"{calib.di_count}  (cap {calib.di_cap}{widened})")
     row("Fails (<50%)", str(calib.fail_count))
     doc.add_paragraph()
 

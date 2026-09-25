@@ -6,14 +6,18 @@ provider-preset branches, reset flow.
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
+
+APP = pathlib.Path(__file__).resolve().parent.parent / "app.py"
 
 st_testing = pytest.importorskip("streamlit.testing.v1")
 
 
 @pytest.fixture()
 def at():
-    app = st_testing.AppTest.from_file("app.py", default_timeout=60)
+    app = st_testing.AppTest.from_file(str(APP), default_timeout=60)
     app.run()
     assert not app.exception, [str(e) for e in app.exception]
     return app
@@ -112,7 +116,7 @@ def test_cap_override_does_not_leak_into_next_session_defaults(at):
     at.run()
     assert config.MAX_REPORT_CHARS == 2000
 
-    fresh = st_testing_v1.AppTest.from_file("app.py", default_timeout=60)
+    fresh = st_testing_v1.AppTest.from_file(str(APP), default_timeout=60)
     fresh.run()
     fresh_cap = [w for w in fresh.sidebar.number_input if "Student report" in w.label][0]
     assert fresh_cap.value == config.BASE_MAX_REPORT_CHARS

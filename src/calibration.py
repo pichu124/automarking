@@ -56,6 +56,7 @@ class CalibrationReport:
     shift: float
     raw_std: float = 0.0          # spread of the model's raw scores
     distinct_finals: int = 0      # how many distinct calibrated totals
+    di_cap_widened: bool = False  # no-HD rule applied (DI cap raised)
 
     @property
     def low_discrimination(self) -> bool:
@@ -81,8 +82,33 @@ def calibrate_scores(
 
     Returns ``(final_totals, report)`` where ``final_totals`` is aligned with
     the input order.
+
+    If the cohort ends up with no High Distinction - the HD cap rounds down to
+    zero places, or no report reaches the HD threshold - the unused HD share
+    is released to Distinction: the cohort is re-calibrated with the DI cap at
+    ``di_cap_fraction_no_hd`` (and the report's ``di_cap_widened`` is set).
     """
     cfg = config or DEFAULT_CALIBRATION
+    final, report = _calibrate_once(raw_totals, cfg)
+    wider = getattr(cfg, "di_cap_fraction_no_hd", cfg.di_cap_fraction)
+    if report.n and report.hd_count == 0 and wider > cfg.di_cap_fraction:
+        import dataclasses
+
+        w_final, w_report = _calibrate_once(
+            raw_totals, dataclasses.replace(cfg, di_cap_fraction=wider)
+        )
+        # Only valid while the cohort still has no HD; if widening DI somehow
+        # produced one, the ordinary caps apply.
+        if w_report.hd_count == 0:
+            w_report.di_cap_widened = True
+            return w_final, w_report
+    return final, report
+
+
+def _calibrate_once(
+    raw_totals: Sequence[float],
+    cfg: CalibrationConfig,
+) -> tuple[List[float], CalibrationReport]:
     n = len(raw_totals)
     if n == 0:
         return [], CalibrationReport(0, 0.0, 0.0, 0, 0, 0, 0, 0, 0.0)

@@ -22,7 +22,10 @@ def _assert_constraints(raw, final, report):
     assert hd <= math.floor(CFG.hd_cap_fraction * n), f"HD {hd} exceeds cap"
     # DI cap.
     di = sum(1 for s in final if CFG.di_lower <= s < CFG.di_upper)
-    assert di <= math.floor(CFG.di_cap_fraction * n), f"DI {di} exceeds cap"
+    # With no HD in the cohort the DI cap widens (di_cap_fraction_no_hd).
+    di_frac = CFG.di_cap_fraction_no_hd if report.di_cap_widened else CFG.di_cap_fraction
+    assert report.di_cap == math.floor(di_frac * n)
+    assert di <= report.di_cap, f"DI {di} exceeds cap"
     # Scores stay in range.
     assert all(CFG.score_floor - 0.01 <= s <= CFG.score_ceiling + 0.01 for s in final)
     # Ranking is preserved: sorting raw desc gives final non-increasing.
@@ -171,9 +174,12 @@ def test_fuzz_invariants_across_sidebar_configs():
         )
         for raw in cohorts:
             n = len(raw)
-            final, _ = calibrate_scores(raw, cfg)
+            final, rep = calibrate_scores(raw, cfg)
             assert sum(1 for s in final if s >= cfg.hd_threshold) <= math.floor(hd / 100 * n)
-            assert sum(1 for s in final if cfg.di_lower <= s < cfg.di_upper) <= math.floor(di / 100 * n)
+            di_frac = max(di / 100, cfg.di_cap_fraction_no_hd) if rep.di_cap_widened else di / 100
+            if rep.di_cap_widened:
+                assert rep.hd_count == 0
+            assert sum(1 for s in final if cfg.di_lower <= s < cfg.di_upper) <= math.floor(di_frac * n)
             assert all(cfg.score_floor - 0.01 <= s <= cfg.score_ceiling + 0.01 for s in final)
             if avoid:
                 assert not any(
@@ -185,3 +191,35 @@ def test_fuzz_invariants_across_sidebar_configs():
             assert all(of[k] >= of[k + 1] - 0.11 for k in range(n - 1)), (
                 f"rank inversion: cfg=({mean},{hd},{di},{avoid},{guard})"
             )
+
+
+def test_no_hd_places_widens_di_cap_to_30_percent():
+    # 7 reports: the HD cap (10%) rounds to 0 places, so DI may take 30%
+    # (2 places) instead of 20% (1 place).
+    raw = [82.0, 81.5, 81.0, 76.0, 74.0, 70.0, 62.0]
+    final, report = calibrate_scores(raw)
+    assert report.hd_count == 0
+    assert report.di_cap_widened is True
+    assert report.di_cap == math.floor(0.30 * len(raw)) == 2
+    assert sum(1 for s in final if 70 <= s < 80) <= 2
+
+
+def test_di_cap_stays_20_percent_when_cohort_has_hd():
+    random.seed(3)
+    raw = [max(0, min(100, random.gauss(72, 12))) for _ in range(30)]
+    final, report = calibrate_scores(raw)
+    assert report.hd_count > 0
+    assert report.di_cap_widened is False
+    assert report.di_cap == math.floor(0.20 * 30)
+
+
+def test_no_hd_awarded_despite_places_also_widens():
+    import dataclasses
+
+    # HD places exist, but the target mean is so low nobody reaches 80.
+    cfg = dataclasses.replace(CFG, target_mean_low=55.0, target_mean_high=56.0)
+    raw = [60.0 + i * 0.5 for i in range(20)]
+    final, report = calibrate_scores(raw, cfg)
+    if report.hd_count == 0:
+        assert report.di_cap_widened is True
+        assert report.di_cap == math.floor(0.30 * 20)

@@ -79,6 +79,10 @@ class CalibrationConfig:
     di_lower: float = 70.0
     di_upper: float = 80.0
     di_cap_fraction: float = 0.20
+    # When the cohort ends up with no High Distinction (the HD cap rounds down
+    # to 0 places, or no report reaches the HD threshold), the unused HD share
+    # is released to Distinction: the DI cap widens to this fraction instead.
+    di_cap_fraction_no_hd: float = 0.30
 
     # Anything below this counts as a Fail; the engine minimises these.
     fail_threshold: float = 50.0

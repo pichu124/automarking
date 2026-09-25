@@ -99,6 +99,7 @@ def _calibration_config():
         target_mean_high=mid + 0.5,
         hd_cap_fraction=st.session_state.get("cal_hd", 10) / 100.0,
         di_cap_fraction=st.session_state.get("cal_di", 20) / 100.0,
+        di_cap_fraction_no_hd=st.session_state.get("cal_di_no_hd", 30) / 100.0,
         avoid_band_boundaries=st.session_state.get("cal_avoid", True),
         boundary_guard=st.session_state.get("cal_guard", 1.5),
     )
@@ -382,6 +383,13 @@ def sidebar() -> None:
         st.slider(
             "Distinction cap (%)", 0, 40, step=1, key="cal_di",
             help="Max % of the cohort scoring 70–79.",
+        )
+        st.session_state.setdefault("cal_di_no_hd", 30)
+        st.slider(
+            "Distinction cap when no HD (%)", 0, 50, step=1, key="cal_di_no_hd",
+            help="Used instead of the Distinction cap when the cohort has no "
+                 "High Distinction (the HD cap rounds to 0 places, or no report "
+                 "reaches 80) - the unused HD share goes to Distinction.",
         )
         st.session_state.setdefault("cal_avoid", True)
         st.checkbox("Avoid boundary scores (59/69/79)", key="cal_avoid")
@@ -964,6 +972,12 @@ def _render_results() -> None:
         cols[2].metric("DI (70-79%)", f"{calib.di_count}", help=f"cap {calib.di_cap}")
         cols[3].metric("Fails (<50%)", f"{calib.fail_count}")
         cols[4].metric("Reports", f"{calib.n}")
+        if getattr(calib, "di_cap_widened", False):
+            st.info(
+                f"No High Distinction in this cohort, so the Distinction cap was "
+                f"widened to {calib.di_cap} place(s) (the 'Distinction cap when "
+                "no HD' setting)."
+            )
         if calib.low_discrimination:
             st.warning(
                 f"⚠️ **Low differentiation.** The model gave very similar raw "
