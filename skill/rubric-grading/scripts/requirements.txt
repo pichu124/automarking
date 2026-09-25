@@ -1,0 +1,6 @@
+python-docx
+pypdf
+openpyxl
+pyxlsb
+xlrd
+pydantic
