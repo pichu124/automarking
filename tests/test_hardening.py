@@ -250,8 +250,8 @@ def test_context_overflow_keep_chars_parses_api_messages():
     )
     keep = _context_overflow_keep_chars(anthropic, 6_400_000)
     assert keep is not None
-    # limit/actual * 0.85 => ~53% of the text kept.
-    assert 3_000_000 < keep < 3_500_000
+    # Trimmed by the 600,280-token excess (+15% headroom) => fits, no more.
+    assert 3_500_000 < keep <= 6_400_000 - 600_280 * 4
 
     openai_style = Exception(
         "This model's maximum context length is 128000 tokens. However, your "

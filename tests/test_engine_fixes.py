@@ -128,3 +128,42 @@ def test_claude_unparseable_output_is_a_model_output_error():
 
 def test_model_not_found_404_is_a_provider_failure():
     assert _is_provider_unhealthy(_openai_error(openai.NotFoundError, 404))
+
+
+# --- 2. Context overflow trims by the excess, from the length actually sent ---
+
+def test_overflow_trims_by_excess_not_by_completion_ratio():
+    openai_style = Exception(
+        "This model's maximum context length is 128000 tokens. However, you "
+        "requested 140000 tokens (124000 in the messages, 16000 in the completion)."
+    )
+    keep = _context_overflow_keep_chars(openai_style, 480_000)
+    # 12,000 tokens over => drop ~48k-55k chars, keep the rest (not ~10%).
+    assert 420_000 <= keep <= 480_000 - 12_000 * 4
+
+    anthropic_style = Exception("prompt is too long: 1600280 tokens > 1000000 maximum")
+    keep = _context_overflow_keep_chars(anthropic_style, 6_400_000)
+    assert 3_500_000 < keep <= 6_400_000 - 600_280 * 4
+
+
+def test_overflow_retry_shrinks_the_capped_text_actually_sent(monkeypatch):
+    monkeypatch.setattr(config, "MAX_REPORT_CHARS", 40_000)
+    limit = 9_000
+    sent_lengths = []
+
+    class Grader:
+        label = "primary"
+
+        def grade_report(self, *, source_name, report_text, **_):
+            sent = build_grading_user_message(source_name, report_text)
+            sent_lengths.append(len(sent))
+            tokens = len(sent) // 4
+            if tokens > limit:
+                raise Exception(f"prompt is too long: {tokens} tokens > {limit} maximum")
+            return _ok(source_name)
+
+    res = grade_batch(Grader(), _session(), [ParsedDocument("big.docx", "word " * 20_000)])
+    assert res.errors == []
+    assert len(res.reports) == 1
+    assert sent_lengths[-1] < sent_lengths[0]
+    assert any("context window" in n for n in res.notes)

@@ -34,6 +34,7 @@ from typing import Callable, List, Optional, Protocol, Sequence
 
 from .calibration import CalibrationConfig, CalibrationReport, calibrate_scores, rescale_components
 from .document_parser import ParsedDocument
+from .estimator import CHARS_PER_TOKEN
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
 from . import config
 from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user
@@ -182,23 +183,34 @@ _CONTEXT_OVERFLOW_TOKENS = (
     "context window",
     "exceeds the maximum number of tokens",
 )
+_TOKEN_COUNT_RE = re.compile(r"\b\d[\d,]{3,}\b")
+# The model's limit sits next to the word "maximum": "maximum context length is
+# 128000" (OpenAI/vLLM/DeepSeek), "> 1000000 maximum" (Anthropic), "maximum
+# number of tokens allowed (1048576)" (Gemini), "131072 maximum context length"
+# (Mistral).
+_TOKEN_LIMIT_RE = re.compile(r"maximum\D{0,40}?(\d[\d,]{3,})|(\d[\d,]{3,})\s+maximum")
 
 
 def _context_overflow_keep_chars(exc: Exception, current_chars: int) -> int | None:
     """How many chars of the report to keep for a retry, or None if ``exc`` is
     not a context-window overflow.
 
-    APIs state the actual and maximum token counts in the message (e.g.
-    "1600280 tokens > 1000000 maximum"); scale the report to fit with 15%
-    headroom. Without parseable numbers, halve it.
+    APIs state the requested and maximum token counts in the message; the
+    requested total is the largest number (any breakdown — "124000 in the
+    messages, 16000 in the completion" — is smaller). Trim the report by the
+    excess at ~4 chars/token plus 15% headroom. Without parseable numbers,
+    halve it.
     """
     msg = str(exc).lower()
     if not any(tok in msg for tok in _CONTEXT_OVERFLOW_TOKENS):
         return None
-    nums = [int(n.replace(",", "")) for n in re.findall(r"\d[\d,]{3,}", msg)]
-    nums = [n for n in nums if n >= 1000]
-    if len(nums) >= 2 and max(nums) > min(nums):
-        keep = int(current_chars * (min(nums) / max(nums)) * 0.85)
+    nums = [int(n.replace(",", "")) for n in _TOKEN_COUNT_RE.findall(msg)]
+    limit = _TOKEN_LIMIT_RE.search(msg)
+    excess = 0
+    if nums and limit:
+        excess = max(nums) - int((limit.group(1) or limit.group(2)).replace(",", ""))
+    if excess > 0:
+        keep = int(current_chars - excess * CHARS_PER_TOKEN * 1.15)
     else:
         keep = current_chars // 2
     return max(2000, min(keep, current_chars - 1))
@@ -249,8 +261,14 @@ def _grade_pass1(
                     )
                     break
                 except Exception as exc:
-                    keep = _context_overflow_keep_chars(exc, len(report_text))
-                    if keep is None or attempt == 2 or keep >= len(report_text):
+                    # Measure what was actually SENT: the provider caps the body
+                    # at MAX_REPORT_CHARS, so trimming relative to the raw length
+                    # would resend the same capped text.
+                    sent = len(report_text)
+                    if config.MAX_REPORT_CHARS > 0:
+                        sent = min(sent, config.MAX_REPORT_CHARS)
+                    keep = _context_overflow_keep_chars(exc, sent)
+                    if keep is None or attempt == 2 or keep >= sent:
                         raise
                     report_text = report_text[:keep].rstrip() + (
                         "\n\n[NOTE: the submission was truncated HERE because it "
