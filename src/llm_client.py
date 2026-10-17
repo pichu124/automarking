@@ -26,6 +26,16 @@ from .prompts import (
 )
 
 
+class ModelOutputError(ValueError):
+    """The model produced unusable output for ONE report.
+
+    A distinct type so the fallback engine can classify it as a per-report
+    content error no matter what the message contains — the message embeds the
+    model's own prose, which could coincidentally include health-sounding words
+    ("billing", "quota") when the student's report is about such a topic.
+    """
+
+
 class GradingLLM:
     def __init__(
         self,
@@ -67,7 +77,7 @@ class GradingLLM:
         )
         rubric = response.parsed_output
         if rubric is None:
-            raise RuntimeError("Rubric structuring returned no parseable output.")
+            raise ModelOutputError("Rubric structuring returned no parseable output.")
         return _normalise_weights(rubric)
 
     # --- Generic text completion (used for sample summarisation) ----------
@@ -116,7 +126,7 @@ class GradingLLM:
         )
         result = response.parsed_output
         if result is None:
-            raise RuntimeError(f"Grading returned no parseable output for {source_name}.")
+            raise ModelOutputError(f"Grading returned no parseable output for {source_name}.")
         return result
 
 

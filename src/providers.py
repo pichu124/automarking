@@ -25,7 +25,7 @@ from typing import List, Optional
 
 from . import config
 from .config import GRADING_MAX_TOKENS, RUBRIC_MAX_TOKENS
-from .llm_client import GradingLLM, _normalise_weights
+from .llm_client import GradingLLM, ModelOutputError, _normalise_weights
 from .models import GradingResult, RubricComponent, StructuredRubric
 from .prompts import (
     GRADING_JSON_INSTRUCTION,
@@ -118,16 +118,6 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
 
 
 # --- JSON helpers ----------------------------------------------------------
-
-class ModelOutputError(ValueError):
-    """The model produced unusable output for ONE report.
-
-    A distinct type so the fallback engine can classify it as a per-report
-    content error no matter what the message contains — the message embeds the
-    model's own prose, which could coincidentally include health-sounding words
-    ("billing", "quota") when the student's report is about such a topic.
-    """
-
 
 def _extract_json(text: str) -> dict:
     """Pull a JSON object out of a model response, tolerating local-model quirks.

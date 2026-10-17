@@ -116,8 +116,9 @@ class BatchResult:
 # --- Provider-health classification ---------------------------------------
 
 # 413 (request too large) is included so an oversized request falls back to a
-# bigger-context provider rather than failing report-by-report.
-_HEALTH_STATUS = {401, 403, 408, 409, 413, 429, 500, 502, 503, 504, 529}
+# bigger-context provider rather than failing report-by-report; 404 (model not
+# found) is a provider configuration problem, never report-specific.
+_HEALTH_STATUS = {401, 403, 404, 408, 409, 413, 429, 500, 502, 503, 504, 529}
 _HEALTH_NAME_TOKENS = (
     "ratelimit", "overloaded", "timeout", "connection", "internalservererror",
     "serviceunavailable", "apistatuserror", "apiconnectionerror",
@@ -150,27 +151,22 @@ def _is_provider_unhealthy(exc: Exception) -> bool:
     connection errors qualify; a plain validation / JSON-parse error does not
     (that's a per-report content issue).
     """
-    # A ModelOutputError is by definition a per-report content failure; its
-    # message quotes the model's prose, which can coincidentally contain
-    # health-sounding words ("billing", "quota") — never treat it as a
-    # provider failure or one odd report would discard the whole cohort.
-    if isinstance(exc, ModelOutputError):
-        return False
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(exc, "status", None)
     if isinstance(status, int) and status in _HEALTH_STATUS:
         return True
+    # Token matching is unsafe on content-type exceptions: a ValueError
+    # (ModelOutputError, JSON parse, pydantic validation) quotes the MODEL'S OWN
+    # OUTPUT or the filename, which can innocently contain "authentication"/
+    # "timeout"/"quota" when the report or a rubric component is about such a
+    # topic — one odd report would then discard the whole cohort. Real
+    # provider-health failures from the SDKs are never ValueErrors.
+    if isinstance(exc, ValueError):
+        return False
     blob = f"{type(exc).__name__} {exc}".lower()
     if any(tok in blob for tok in _HEALTH_NAME_TOKENS):
         return True
-    # Message-token matching is a last resort and unsafe on content-type
-    # exceptions: a ValueError (JSON parse, pydantic validation) quotes the
-    # MODEL'S OWN OUTPUT, which can innocently contain "billing"/"quota"/
-    # "api key" when the student's report happens to discuss such a topic.
-    # Real provider-health failures from the SDKs are never plain ValueErrors.
-    if isinstance(exc, ValueError):
-        return False
     return any(tok in blob for tok in _HEALTH_MESSAGE_TOKENS)
 
 
