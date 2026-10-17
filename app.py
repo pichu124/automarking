@@ -687,15 +687,23 @@ def batch_ui() -> None:
                 "(case-insensitive). Every row with the same label becomes "
                 "ONE submission; a unique label keeps a file on its own."
             )
+            # A data_editor's widget ID includes its data, so the rows it is
+            # given must stay fixed while the professor edits (rebuilding
+            # them from manual_groups changed the ID and dropped the next
+            # edit). Re-seed only when the key changes: new upload, grouping
+            # toggle, or reset.
             editor_key = (
                 f"group_editor_{hash(st.session_state.get('_batch_ids', ()))}"
-                f"_{st.session_state.get('_group_editor_nonce', 0)}"
+                f"_{group_enabled}_{st.session_state.get('_group_editor_nonce', 0)}"
             )
-            edited = st.data_editor(
-                [
+            seed = st.session_state.get("_group_editor_seed")
+            if not seed or seed[0] != editor_key:
+                seed = st.session_state["_group_editor_seed"] = (editor_key, [
                     {"File": d.name, "Group": manual.get(d.name, auto_labels[d.name])}
                     for d in raw_docs
-                ],
+                ])
+            edited = st.data_editor(
+                seed[1],
                 column_config={
                     "File": st.column_config.TextColumn("File", disabled=True),
                     "Group": st.column_config.TextColumn(
