@@ -948,6 +948,11 @@ def grade_ui() -> None:
 
     if st.button("🚀 Run Two-Pass Grading", type="primary", disabled=not ready):
         session = _session_from_state()
+        # Any widget click restarts the script, silently discarding this run.
+        notice = st.warning(
+            "⏳ Grading is running — don't click anything on this page until "
+            "grading finishes: any click restarts the app and discards this run."
+        )
         progress = st.progress(0.0, text="Starting…")
 
         def cb(done: int, total: int, label: str) -> None:
@@ -976,6 +981,7 @@ def grade_ui() -> None:
             st.error(f"Grading failed: {exc}")
         finally:
             progress.empty()
+            notice.empty()
 
     _render_results()
 

@@ -227,3 +227,30 @@ def test_new_batch_flags_previous_results(monkeypatch):
     assert "previous batch" in _warnings(at)
     assert len(at.session_state["batch_result"].reports) == 3  # flagged, not deleted
 
+
+# --- 5. The professor is told not to click while grading runs -----------------
+
+def _page_so_far():
+    """The page as rendered at this moment of the script run."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from streamlit.testing.v1.element_tree import parse_tree_from_messages
+
+    runner = get_script_run_ctx()._enqueue.__self__
+    return parse_tree_from_messages(runner.forward_msgs())
+
+
+def test_grading_run_warns_not_to_interact_until_done(monkeypatch):
+    seen_while_grading: list[str] = []
+
+    class _Watching(_Grades70):
+        def grade_report(self, **kw):
+            seen_while_grading.extend(w.value for w in _page_so_far().warning)
+            return super().grade_report(**kw)
+
+    _use_grader(monkeypatch, _Watching())
+    at = _ready_app()
+    _click(at, "Run Two-Pass")
+
+    assert any("until grading finishes" in w for w in seen_while_grading)
+    assert "until grading finishes" not in _warnings(at)  # gone once done
+
