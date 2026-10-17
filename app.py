@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections import Counter
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -88,6 +89,19 @@ def _uploads_text(uploads) -> str:
     if len(docs) <= 1:
         return docs[0].text if docs else ""
     return "\n\n".join(f"=== File: {d.name} ===\n{d.text.strip()}" for d in docs)
+
+
+def _parse_batch(uploads) -> list[ParsedDocument]:
+    """Parse the student uploads. A file name produced by several uploads
+    (s1111111.zip and s2222222.zip both holding report.docx) is prefixed with
+    its upload's name: grouping keys on the name, so duplicates would merge
+    two students — and the prefix keeps the student ID from the zip name."""
+    parsed = [(up.name, d) for up in uploads for d in parse_upload(up)]
+    counts = Counter(d.name for _, d in parsed)
+    return [
+        ParsedDocument(f"{up_name}/{d.name}", d.text) if counts[d.name] > 1 else d
+        for up_name, d in parsed
+    ]
 
 
 def _calibration_config():
@@ -648,10 +662,7 @@ def batch_ui() -> None:
     if uploads:
         ids = tuple(u.file_id for u in uploads)
         if st.session_state.get("_batch_ids") != ids:
-            raw_docs: list[ParsedDocument] = []
-            for up in uploads:
-                raw_docs.extend(parse_upload(up))
-            st.session_state["_batch_raw"] = raw_docs
+            st.session_state["_batch_raw"] = _parse_batch(uploads)
             st.session_state["_batch_ids"] = ids
     elif st.session_state.pop("_batch_ids", None) is not None:
         st.session_state["_batch_raw"] = []

@@ -85,3 +85,42 @@ def test_zip_nesting_deeper_than_lms_export_is_refused():
     assert "the student's essay" in docs[folder + "essay.txt"]
     assert "[Could not read" in docs[folder + "inner.zip"]
     assert "nested" in docs[folder + "inner.zip"]
+
+
+# --- Batch upload: same-named files from different uploads must not merge ------
+
+class _Upload:
+    def __init__(self, name: str, data: bytes):
+        self.name = name
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+def test_same_named_files_in_two_student_zips_stay_two_submissions():
+    import app
+
+    uploads = [
+        _Upload("s1111111.zip", _zip({"report.txt": "first student " * 40})),
+        _Upload("s2222222.zip", _zip({"report.txt": "second student " * 40})),
+    ]
+    docs = app._parse_batch(uploads)
+    assert [d.name for d in docs] == [
+        "s1111111.zip/report.txt", "s2222222.zip/report.txt",
+    ]
+    subs = _submissions(docs)
+    assert len(subs) == 2
+    assert "first student" in subs[0].text and "second" not in subs[0].text
+
+
+def test_batch_names_without_collision_are_left_alone():
+    import app
+
+    uploads = [
+        _Upload("s1111111_report.txt", b"first essay " * 40),
+        _Upload("class.zip", _zip({"s2222222_report.txt": "second essay " * 40})),
+    ]
+    assert [d.name for d in app._parse_batch(uploads)] == [
+        "s1111111_report.txt", "s2222222_report.txt",
+    ]
