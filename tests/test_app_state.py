@@ -145,3 +145,30 @@ def test_grouping_toggle_regroups_and_later_edits_persist():
     }
     assert len(at.session_state["documents"]) == 2
 
+
+# --- 2. A failed re-run must not replace good results -------------------------
+
+def test_failed_rerun_keeps_previous_results_and_reports_the_failure(monkeypatch):
+    at = _ready_app()
+    _use_grader(monkeypatch, _Grades70())
+    _click(at, "Run Two-Pass")
+    assert len(at.session_state["batch_result"].reports) == 3
+
+    _use_grader(monkeypatch, _RejectsKey())
+    _click(at, "Run Two-Pass")
+
+    assert len(at.session_state["batch_result"].reports) == 3
+    errors = " | ".join(e.value for e in at.error)
+    assert "invalid x-api-key" in errors
+    assert "next provider" not in errors  # there is no next provider
+
+
+def test_total_failure_on_first_run_is_an_error_not_a_failed_report(monkeypatch):
+    at = _ready_app()
+    _use_grader(monkeypatch, _RejectsKey())
+    _click(at, "Run Two-Pass")
+
+    assert at.session_state["batch_result"] is None
+    assert "invalid x-api-key" in " | ".join(e.value for e in at.error)
+    assert not [e for e in at.expander if "report(s) failed" in e.label]
+

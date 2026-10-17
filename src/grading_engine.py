@@ -452,6 +452,7 @@ def grade_batch_with_fallback(
 
     for index, spec in enumerate(specs):
         label = spec.display
+        has_next = index < len(specs) - 1
         try:
             grader = builder(spec)
         except Exception as exc:
@@ -472,15 +473,19 @@ def grade_batch_with_fallback(
             # Discard partial work — the next provider re-grades from scratch.
             attempted.append(label)
             result.notes.append(
-                f"{label} unavailable ({exc.reason}); re-grading the whole cohort "
-                f"with the next provider to keep scores consistent."
+                f"{label} unavailable ({exc.reason}); "
+                + ("re-grading the whole cohort with the next provider to keep "
+                   "scores consistent." if has_next else "no fallback provider left.")
             )
             continue
 
         if not raw_results:
             attempted.append(label)
             result.errors.extend(per_errors)
-            result.notes.append(f"{label} produced no usable grades; trying next provider.")
+            result.notes.append(
+                f"{label} produced no usable grades"
+                + ("; trying next provider." if has_next else ".")
+            )
             continue
 
         # Success: this provider graded the whole cohort.

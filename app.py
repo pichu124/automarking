@@ -940,7 +940,17 @@ def grade_ui() -> None:
                 _provider_chain(), session, st.session_state["documents"],
                 calibration_config=_calibration_config(), progress_callback=cb,
             )
-            st.session_state["batch_result"] = result
+            if result.raw_grades:
+                st.session_state["batch_result"] = result
+            else:
+                # Nothing graded (bad key, quota, …): say so loudly and keep
+                # any earlier results instead of replacing them with an empty
+                # one that reads like a single failed report.
+                st.error(
+                    "Grading failed — no report was graded (any previous "
+                    "results are kept below):\n\n"
+                    + "\n".join(f"- {line}" for line in result.notes + result.errors)
+                )
         except Exception as exc:
             st.error(f"Grading failed: {exc}")
         finally:
