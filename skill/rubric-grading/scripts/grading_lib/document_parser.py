@@ -6,7 +6,6 @@ display name, which downstream code feeds to the LLM.
 """
 from __future__ import annotations
 
-import html
 import io
 import re
 import zipfile
@@ -14,6 +13,8 @@ from dataclasses import dataclass
 from typing import List
 
 import docx  # python-docx
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
+from lxml import etree  # installed with python-docx
 from pypdf import PdfReader
 
 
@@ -34,49 +35,120 @@ class ParsedDocument:
 def _read_docx(data: bytes) -> str:
     try:
         document = docx.Document(io.BytesIO(data))
-        parts: List[str] = [p.text for p in document.paragraphs if p.text.strip()]
-        # Include simple table text — rubrics and grade sheets are often tables.
-        for table in document.tables:
-            for row in table.rows:
-                cells = [c.text.strip() for c in row.cells]
-                if any(cells):
-                    parts.append(" | ".join(cells))
-        text = "\n".join(parts)
     except Exception:
         # python-docx refuses slightly-broken packages outright — e.g. a
         # dangling relationship to a deleted image ("There is no item named
         # 'word/media/imageN.png' in the archive") after a bad edit/repair.
-        # The document text itself is intact in word/document.xml, so fall
-        # through to the raw-XML reader instead of failing the submission.
-        text = ""
-    if text.strip():
-        return text
-    # Fallback: python-docx's paragraph/table API misses text boxes, shapes,
-    # headers and footers (and refuses broken-relationship packages). Pull
-    # text straight from the docx XML so the content still comes through.
-    return _docx_xml_text(data)
+        # The same goes for XML with raw control characters. The text itself
+        # is intact in word/document.xml, so read the XML parts straight from
+        # the zip instead of failing the submission.
+        return _docx_xml_text(data)
+    parts = [
+        _parse_docx_xml(rel.target_part.blob)
+        for rel in document.part.rels.values()
+        if rel.reltype in (RT.FOOTNOTES, RT.ENDNOTES, RT.HEADER, RT.FOOTER)
+    ]
+    return _docx_text(document.element.body, parts)
 
 
 def _docx_xml_text(data: bytes) -> str:
-    """Extract text from a docx's XML parts (catches text boxes/headers)."""
-    out: List[str] = []
+    """Same extraction as _read_docx, locating the parts by their usual names."""
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        names = [
-            n for n in zf.namelist()
-            if n.startswith("word/") and n.endswith(".xml")
-            and any(k in n for k in ("document", "header", "footer"))
+        body = _parse_docx_xml(zf.read("word/document.xml"))
+        parts = [
+            _parse_docx_xml(zf.read(n)) for n in zf.namelist()
+            if re.fullmatch(r"word/(footnotes|endnotes|header\d*|footer\d*)\.xml", n)
         ]
-        names.sort(key=lambda n: (0 if n == "word/document.xml" else 1, n))
-        for name in names:
-            xml = zf.read(name).decode("utf-8", errors="replace")
-            # Preserve structure, then strip tags so text-box runs survive.
-            xml = xml.replace("</w:p>", "\n").replace("<w:tab/>", "\t")
-            xml = re.sub(r"<w:br[^>]*/>", "\n", xml)
-            stripped = re.sub(r"<[^>]+>", "", xml)
-            cleaned = html.unescape(stripped).strip()
-            if cleaned:
-                out.append(cleaned)
-    return "\n".join(out).strip()
+    return _docx_text(body, parts)
+
+
+# recover=True drops characters XML forbids instead of rejecting the whole
+# part; entities stay unresolved because the file is untrusted upload data.
+_DOCX_XML_PARSER = etree.XMLParser(recover=True, resolve_entities=False)
+
+
+def _parse_docx_xml(blob: bytes):
+    return etree.fromstring(blob, _DOCX_XML_PARSER)
+
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_M_T = "{http://schemas.openxmlformats.org/officeDocument/2006/math}t"
+# Never text: paragraph properties (their w:tab elements are tab stops), the
+# VML copy Word writes of every text box (mc:Fallback), tracked deletions and
+# moved-away text. Field codes (w:instrText) and deleted runs (w:delText) are
+# skipped by simply not being w:t.
+_DOCX_SKIP = frozenset({
+    "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback",
+    _W + "pPr", _W + "del", _W + "moveFrom",
+})
+_DOCX_CHARS = {
+    _W + "tab": "\t", _W + "ptab": "\t", _W + "br": "\n", _W + "cr": "\n",
+    _W + "noBreakHyphen": "-",
+}
+_NOTE_SEPARATORS = frozenset({"separator", "continuationSeparator", "continuationNotice"})
+# Parts appended after the body, in this order, each under its heading.
+_DOCX_EXTRA_PARTS = (
+    ("[Footnotes]", (_W + "footnotes",)),
+    ("[Endnotes]", (_W + "endnotes",)),
+    ("[Headers and footers]", (_W + "hdr", _W + "ftr")),
+)
+
+
+def _docx_text(body, parts) -> str:
+    """Body text in document order, then notes and headers/footers."""
+    lines = _docx_blocks(body)
+    for heading, tags in _DOCX_EXTRA_PARTS:
+        extra = [line for root in parts if root.tag in tags for line in _docx_blocks(root)]
+        if extra:
+            lines += ["", heading, *extra]
+    return "\n".join(lines).strip()
+
+
+def _docx_blocks(element) -> List[str]:
+    """Text lines under `element` in document order: one per non-empty
+    paragraph, one per table row (cells joined by " | "). Descends through
+    content controls, text boxes and any other wrapper that holds paragraphs."""
+    blocks: List[str] = []
+    for child in element:
+        if child.tag in _DOCX_SKIP or child.get(_W + "type") in _NOTE_SEPARATORS:
+            continue
+        if child.tag == _W + "p":
+            blocks.extend(_docx_paragraph(child))
+        elif child.tag == _W + "tr":
+            # Cells may sit inside a content control; nested tables' cells don't count.
+            cells = [
+                "\n".join(_docx_blocks(tc)).strip() for tc in child.iter(_W + "tc")
+                if next(tc.iterancestors(_W + "tr")) is child
+            ]
+            if any(cells):
+                blocks.append(" | ".join(cells))
+        else:
+            blocks.extend(_docx_blocks(child))
+    return blocks
+
+
+def _docx_paragraph(paragraph) -> List[str]:
+    """The paragraph's own text (runs, content controls, equations), then the
+    lines of any text box anchored in it."""
+    chars: List[str] = []
+    boxes: List[str] = []
+
+    def visit(element) -> None:
+        for child in element:
+            if child.tag in _DOCX_SKIP:
+                continue
+            if child.tag in (_W + "t", _M_T):
+                chars.append(child.text or "")
+            elif child.tag in _DOCX_CHARS:
+                chars.append(_DOCX_CHARS[child.tag])
+            elif child.tag == _W + "txbxContent":
+                boxes.extend(_docx_blocks(child))
+            else:
+                visit(child)
+
+    visit(paragraph)
+    text = "".join(chars)
+    return ([text] if text.strip() else []) + boxes
 
 
 def _read_pdf(data: bytes) -> str:
