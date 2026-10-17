@@ -210,3 +210,54 @@ def test_empty_summary_falls_back_to_capped_sample_with_note(monkeypatch):
     assert "H" * 4_000 in hd                 # the original sample is kept...
     assert hd.count("H") <= 5_000            # ...capped like any raw sample
     assert hd.startswith("[") and "summary" in hd.lower()  # with a visible note
+
+
+# --- 4. OpenAI-compatible requests: JSON-mode retry, per-model params, <think> -
+
+def test_json_mode_not_retried_on_auth_error():
+    provider = build_provider("openai", api_key="test-key")
+    provider.client = FakeChat(errors=[_openai_error(openai.AuthenticationError, 401)])
+    with pytest.raises(openai.AuthenticationError):
+        provider.structure_rubric("rubric")
+    assert len(provider.client.calls) == 1
+
+
+def test_json_mode_retried_without_response_format_on_bad_request():
+    provider = build_provider("openai", api_key="test-key")
+    provider.client = FakeChat(
+        content='{"components": [{"name": "A", "weight": 100, "description": ""}]}',
+        errors=[_openai_error(openai.BadRequestError, 400)],
+    )
+    rubric = provider.structure_rubric("rubric")
+    assert [c.name for c in rubric.components] == ["A"]
+    assert "response_format" in provider.client.calls[0]
+    assert "response_format" not in provider.client.calls[1]
+
+
+def _grade(provider) -> dict:
+    provider.client = FakeChat(content=GRADE_JSON)
+    provider.grade_report(
+        task_text="t", rubric_text="r", components=COMPONENTS, reference_samples={},
+        source_name="s.docx", report_text="body",
+    )
+    return provider.client.calls[-1]
+
+
+def test_deepseek_output_tokens_clamped_to_preset_cap():
+    sent = _grade(build_provider("deepseek", api_key="test-key"))
+    assert sent["max_tokens"] == 8192
+
+
+def test_openai_reasoning_models_use_max_completion_tokens_without_temperature():
+    for key, model in (("openai", "o3-mini"), ("openrouter", "openai/gpt-5-mini")):
+        sent = _grade(build_provider(key, model=model, api_key="test-key"))
+        assert sent["max_completion_tokens"] == config.GRADING_MAX_TOKENS
+        assert "max_tokens" not in sent and "temperature" not in sent
+
+    sent = _grade(build_provider("openai", model="gpt-4o-mini", api_key="test-key"))
+    assert sent["max_tokens"] == config.GRADING_MAX_TOKENS and "temperature" in sent
+
+
+def test_extract_json_ignores_think_block_with_braces():
+    text = '<think>Shape is {"total": n}; check {braces}.</think>\n{"total": 65}'
+    assert _extract_json(text) == {"total": 65}

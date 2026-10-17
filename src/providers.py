@@ -50,6 +50,7 @@ class ProviderPreset:
     free: bool = False
     note: str = ""
     api_key_optional: bool = False  # e.g. local Ollama needs no real key
+    max_output_tokens: Optional[int] = None  # API's hard cap on max_tokens
 
 
 # Ordered so the UI can show free/local options prominently.
@@ -96,7 +97,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
         key="deepseek", label="DeepSeek", kind="openai",
         default_model="deepseek-chat", api_key_env="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com",
-        note="Very low cost.",
+        note="Very low cost.", max_output_tokens=8192,
     ),
     "mistral": ProviderPreset(
         key="mistral", label="Mistral", kind="openai",
@@ -128,7 +129,10 @@ def _extract_json(text: str) -> dict:
     """
     if text is None:
         raise ModelOutputError("empty model response")
-    cleaned = text.strip()
+    # Reasoning models (DeepSeek-R1, Qwen) prefix the answer with a
+    # <think>…</think> block — sometimes without the opening tag — whose prose
+    # often contains braces.
+    cleaned = text.rsplit("</think>", 1)[-1].strip()
     if cleaned.startswith("```"):
         # drop the opening fence (``` or ```json) and the closing fence
         cleaned = cleaned.split("```", 2)[1] if cleaned.count("```") >= 2 else cleaned
@@ -194,6 +198,7 @@ class OpenAICompatibleProvider:
         max_retries: int = 4,
         max_tokens_grade: int = GRADING_MAX_TOKENS,
         max_tokens_rubric: int = RUBRIC_MAX_TOKENS,
+        max_output_tokens: int | None = None,
     ):
         try:
             from openai import OpenAI
@@ -206,6 +211,7 @@ class OpenAICompatibleProvider:
         self.temperature = temperature
         self.max_tokens_grade = max_tokens_grade
         self.max_tokens_rubric = max_tokens_rubric
+        self.max_output_tokens = max_output_tokens
         # OpenAI client requires a non-empty key even for keyless local servers.
         # max_retries rides out transient 429/5xx with the SDK's own backoff.
         self.client = OpenAI(
@@ -214,6 +220,14 @@ class OpenAICompatibleProvider:
             max_retries=max_retries,
         )
 
+    def _sampling_kwargs(self, max_tokens: int) -> dict:
+        if self.max_output_tokens:
+            max_tokens = min(max_tokens, self.max_output_tokens)
+        # OpenAI reasoning models reject max_tokens and any non-default temperature.
+        if self.model.lower().removeprefix("openai/").startswith(("o1", "o3", "o4", "gpt-5")):
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens, "temperature": self.temperature}
+
     def complete_text(self, system: str, user: str, max_tokens: int = 1200) -> str:
         resp = self.client.chat.completions.create(
             model=self.model,
@@ -221,8 +235,7 @@ class OpenAICompatibleProvider:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=max_tokens,
-            temperature=self.temperature,
+            **self._sampling_kwargs(max_tokens),
         )
         choice = resp.choices[0]
         text = (choice.message.content or "").strip()
@@ -234,22 +247,23 @@ class OpenAICompatibleProvider:
         return text
 
     def _chat_json(self, system: str, user: str, max_tokens: int) -> dict:
+        from openai import BadRequestError, UnprocessableEntityError
+
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
         base_kwargs = dict(
-            model=self.model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=self.temperature,
+            model=self.model, messages=messages, **self._sampling_kwargs(max_tokens)
         )
         # Prefer JSON mode; fall back if the provider/model doesn't support it.
+        # Only a rejected request means that — retrying auth/rate-limit/timeout
+        # errors would just repeat the SDK's whole retry chain.
         try:
             resp = self.client.chat.completions.create(
                 response_format={"type": "json_object"}, **base_kwargs
             )
-        except Exception:
+        except (BadRequestError, UnprocessableEntityError):
             resp = self.client.chat.completions.create(**base_kwargs)
         return _extract_json(resp.choices[0].message.content)
 
@@ -315,6 +329,7 @@ def build_provider(
         base_url=resolved_base_url,
         temperature=temperature,
         max_retries=max_retries,
+        max_output_tokens=preset.max_output_tokens,
     )
 
 
