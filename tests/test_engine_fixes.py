@@ -261,3 +261,9 @@ def test_openai_reasoning_models_use_max_completion_tokens_without_temperature()
 def test_extract_json_ignores_think_block_with_braces():
     text = '<think>Shape is {"total": n}; check {braces}.</think>\n{"total": 65}'
     assert _extract_json(text) == {"total": 65}
+
+
+# --- 5. Retired Gemini model -------------------------------------------------
+
+def test_gemini_default_model_is_not_retired():
+    assert PROVIDER_PRESETS["gemini"].default_model == "gemini-3.6-flash"

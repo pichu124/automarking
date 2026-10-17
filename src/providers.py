@@ -62,7 +62,7 @@ PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     ),
     "gemini": ProviderPreset(
         key="gemini", label="Google Gemini (free tier)", kind="openai",
-        default_model="gemini-2.0-flash", api_key_env="GEMINI_API_KEY",
+        default_model="gemini-3.6-flash", api_key_env="GEMINI_API_KEY",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         free=True, note="Generous free tier. Get a key at aistudio.google.com.",
     ),

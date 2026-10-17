@@ -34,7 +34,7 @@ unchanged.
 | Provider | Cost | Notes |
 |---|---|---|
 | **Anthropic Claude** | Paid | Best grading quality; prompt caching |
-| **Google Gemini** | 🆓 **free tier** | `gemini-2.0-flash`; key at aistudio.google.com |
+| **Google Gemini** | 🆓 **free tier** | `gemini-3.6-flash`; key at aistudio.google.com |
 | **Groq** | 🆓 **free tier** | Fast, open models (Llama 3.3 70B); console.groq.com |
 | **Ollama** | 🆓 **free, local** | Runs offline on your machine; no API key, full privacy |
 | **OpenRouter** | Mixed | Aggregator; some `:free` models |
