@@ -95,6 +95,8 @@ yourself: very low totals, a 0 on any criterion, anything that contradicts
 the grader's own evidence. Grep the report to confirm a claimed absence
 (e.g. "no ethics section") before accepting it.
 
+`calibrate.py` only accepts totals on a 0-100 scale (component maxima summing to 100) and stops otherwise.
+
 ### 6. Calibrate
 
 Default policy (confirm with the professor; they may change any of it):

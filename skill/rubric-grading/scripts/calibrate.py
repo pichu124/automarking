@@ -11,13 +11,15 @@ mean to 67 without changing anyone's band"):
         --preserve-bands previous_finals.json --mean 67 [--fixed ...] [--guard 1.5]
 
 Each RESULTS_DIR/*.json is one student: {"sid", "total", "components": [...]}.
+Totals must be on a 0-100 scale (component maxima summing to 100); otherwise,
+or for an unknown id in --fixed/--no-floor, it exits without writing anything.
 Writes {"finals": {sid: final}, "summary": {...}} and prints a table.
 
 Standard mode = the app's engine: rank-preserving curve to the target mean,
 HD cap (score >= 80) and DI cap (70-79) as % of cohort, soft floor at 50, and
 optional avoidance of 59/69/79 (scores in [T-guard, T) pushed to T-guard).
 If the cohort ends up with no HD, the DI cap widens to --di-no-hd.
---no-floor: these students keep raw + the cohort shift instead of the floor.
+--no-floor: these students keep raw + the cohort shift (within 0-100) instead of the floor.
 --fixed:    pin exact finals (they still count toward the cohort mean).
 """
 from __future__ import annotations
@@ -56,6 +58,8 @@ def _band_range(v: float, guard: float) -> tuple[float, float]:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", required=True)
     ap.add_argument("--out", required=True)
@@ -72,18 +76,40 @@ def main() -> None:
 
     R = {}
     for p in sorted(glob.glob(os.path.join(a.results, "*.json"))):
-        r = json.load(open(p))
+        r = json.load(open(p, encoding="utf-8"))
         R[r["sid"]] = r
+    maxima = {s: sum(float(c["max"]) for c in r["components"]) for s, r in R.items()}
+    off_scale = [f"{s} ({m:g})" for s, m in maxima.items() if abs(m - 100) > 0.5]
+    if off_scale:
+        sys.exit(
+            "calibrate.py: totals must be on a 0-100 scale - each result's component maxima "
+            f"must sum to 100, but these do not: {', '.join(off_scale)}. Convert those results "
+            "to a 0-100 scale and rerun. Nothing was written."
+        )
     raw = {s: float(r["total"]) for s, r in R.items()}
     fixed = _kv(a.fixed)
-    no_floor = set(filter(None, a.no_floor.split(",")))
+    no_floor = {s.strip() for s in a.no_floor.split(",") if s.strip()}
+    unknown = sorted((set(fixed) | no_floor) - set(raw))
+    if unknown:
+        sys.exit(
+            f"calibrate.py: unknown student id(s) in --fixed/--no-floor: {', '.join(unknown)} "
+            f"(no such sid in {a.results}). Nothing was written."
+        )
     n = len(raw)
     guard = max(a.guard, 1.5)
 
     if a.preserve_bands:
-        prev = json.load(open(a.preserve_bands))
-        prev = prev.get("finals", prev)
+        prev_run = json.load(open(a.preserve_bands, encoding="utf-8"))
+        prev = prev_run.get("finals", prev_run)
+        # The bands were set under the previous run's caps.
+        diag = {k: v for k, v in prev_run.get("summary", {}).items() if k in ("hd_cap", "di_cap")}
         ids = [s for s in raw if s not in fixed]
+        missing = [s for s in ids if s not in prev]
+        if missing:
+            sys.exit(
+                f"calibrate.py: {a.preserve_bands} has no previous final for {', '.join(missing)}; "
+                "pin them with --fixed or rerun the standard calibration. Nothing was written."
+            )
 
         def finals_for(t):
             out = {}
@@ -114,10 +140,11 @@ def main() -> None:
         finals = dict(zip(ids, fin))
         shift = rep.shift
         for s in no_floor:
-            if s in finals:
-                finals[s] = round(raw[s] + shift, 1)
+            finals[s] = round(min(100.0, max(0.0, raw[s] + shift)), 1)
         finals.update(fixed)
         mode, widened = "standard", rep.di_cap_widened
+        diag = {"hd_cap": rep.hd_cap, "di_cap": rep.di_cap, "raw_std": rep.raw_std,
+                "low_discrimination": rep.low_discrimination}
 
     vals = list(finals.values())
     order = sorted(raw, key=lambda s: -raw[s])
@@ -128,10 +155,10 @@ def main() -> None:
         "final_mean": round(statistics.mean(vals), 2), "shift": round(shift, 2),
         "hd": sum(v >= 80 for v in vals), "di": sum(70 <= v < 80 for v in vals),
         "cr": sum(60 <= v < 70 for v in vals), "pa": sum(50 <= v < 60 for v in vals),
-        "fail": sum(v < 50 for v in vals), "di_cap_widened": widened,
+        "fail": sum(v < 50 for v in vals), "di_cap_widened": widened, **diag,
         "rank_inversions": inversions, "boundary_scores": boundary,
     }
-    json.dump({"finals": finals, "summary": summary}, open(a.out, "w"), indent=1)
+    json.dump({"finals": finals, "summary": summary}, open(a.out, "w", encoding="utf-8"), indent=1)
     print(json.dumps(summary, indent=1))
     for s in sorted(finals, key=lambda s: -finals[s]):
         print(f"{s:10s} raw {raw[s]:5.1f} -> {finals[s]:5.1f}")

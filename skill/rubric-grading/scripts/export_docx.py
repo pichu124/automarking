@@ -31,6 +31,8 @@ from grading_lib.models import CalibratedReport, ComponentGrade  # noqa: E402
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", required=True)
     ap.add_argument("--finals", required=True)
@@ -44,12 +46,12 @@ def main() -> None:
     for part in filter(None, a.names.split(",")):
         k, v = part.split("=", 1)
         names[k.strip()] = v.strip().strip('"')
-    fj = json.load(open(a.finals))
+    fj = json.load(open(a.finals, encoding="utf-8"))
     finals, summ = fj["finals"], fj.get("summary", {})
 
     reports, comments = [], {}
     for p in sorted(glob.glob(os.path.join(a.results, "*.json"))):
-        r = json.load(open(p))
+        r = json.load(open(p, encoding="utf-8"))
         sid, f = r["sid"], float(finals[r["sid"]])
         nm = names.get(sid) or r.get("student_name") or ""
         ident = f"{nm} ({sid})" if nm else sid
@@ -70,7 +72,7 @@ def main() -> None:
     calib = CalibrationReport(
         n=len(vals), raw_mean=round(statistics.mean(raws), 2), final_mean=round(statistics.mean(vals), 2),
         hd_count=sum(v >= 80 for v in vals), di_count=sum(70 <= v < 80 for v in vals),
-        fail_count=sum(v < 50 for v in vals), hd_cap=summ.get("hd", 0), di_cap=summ.get("di", 0),
+        fail_count=sum(v < 50 for v in vals), hd_cap=summ.get("hd_cap", "n/a"), di_cap=summ.get("di_cap", "n/a"),
         shift=summ.get("shift", 0.0), raw_std=round(statistics.pstdev(raws), 2) if len(raws) > 1 else 0.0,
         distinct_finals=len(set(vals)), di_cap_widened=bool(summ.get("di_cap_widened")),
     )
