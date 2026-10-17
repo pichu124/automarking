@@ -6,11 +6,14 @@ import io
 import sys
 import zipfile
 
+import pytest
+
 from src import document_parser as dp
 from src.document_parser import (
     auto_group_labels,
     group_by_labels,
     parse_bytes,
+    read_failure_reason,
     text_health,
 )
 
@@ -167,3 +170,28 @@ def test_pdf_images_are_counted_without_pillow(monkeypatch):
         monkeypatch.setitem(sys.modules, mod, None)
     text = parse_bytes("scan.pdf", _pdf_with_images(1, b"\x00"))[0].text
     assert "contains 1 embedded image(s)" in text
+
+
+# --- Office: encrypted or legacy files under an OOXML extension ----------------
+
+_OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504
+
+
+@pytest.mark.parametrize("name", ["report.docx", "grades.xlsx", "calc.xlsm"])
+def test_ole_file_with_ooxml_extension_explains_password_or_legacy(name):
+    text = parse_bytes(name, _OLE)[0].text
+    assert text.startswith(f"[Could not read {name}:")
+    assert "password-protected" in text and "re-save" in text
+    assert "not a zip file" not in text.lower()
+    assert text_health(text) == "read-failed"
+    assert "password-protected" in read_failure_reason(text)
+
+
+def test_legacy_xls_renamed_xlsx_explains_and_real_xls_still_reads():
+    xlwt = pytest.importorskip("xlwt")
+    book = xlwt.Workbook()
+    book.add_sheet("Q1").write(0, 0, "GMVP weight")
+    buf = io.BytesIO()
+    book.save(buf)
+    assert "GMVP weight" in parse_bytes("workbook.xls", buf.getvalue())[0].text
+    assert "password-protected" in parse_bytes("workbook.xlsx", buf.getvalue())[0].text

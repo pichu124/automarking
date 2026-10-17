@@ -29,6 +29,10 @@ _SKIP_PREFIXES = ("__MACOSX/",)
 _MAX_MEMBER_BYTES = 50 * 1024 * 1024       # one decompressed file in a zip
 _MAX_ZIP_TOTAL_BYTES = 300 * 1024 * 1024   # all of one upload, nested included
 _MAX_ZIP_DEPTH = 2                         # LMS export zip -> a student's zip
+# OLE2/CFB signature. Under a .docx/.xlsx name it means the file is password-
+# protected (Office encrypts OOXML into an OLE container) or is a legacy
+# .doc/.xls that was renamed — either way not the zip the extension promises.
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 @dataclass
@@ -389,6 +393,15 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
             "[Image file - visual content (e.g. a screenshot) that cannot be "
             "extracted as text. Do NOT treat the evidence it may contain as "
             "missing or absent; say it could not be verified from the text.]"
+        ))]
+
+    if data.startswith(_OLE_MAGIC) and lowered.endswith(
+        (".docx", ".xlsx", ".xlsm", ".xlsb")
+    ):
+        return [ParsedDocument(name, (
+            f"[Could not read {name}: the file is password-protected, or is a "
+            "legacy .doc/.xls saved under a new extension - remove the "
+            "password, or open it and re-save it as .docx/.xlsx.]"
         ))]
 
     # A single unreadable file must never crash the app — surface a placeholder,
