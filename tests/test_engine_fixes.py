@@ -167,3 +167,46 @@ def test_overflow_retry_shrinks_the_capped_text_actually_sent(monkeypatch):
     assert len(res.reports) == 1
     assert sent_lengths[-1] < sent_lengths[0]
     assert any("context window" in n for n in res.notes)
+
+
+# --- 3. An empty summary never silently replaces the sample -------------------
+
+def test_openai_compatible_empty_completion_raises():
+    provider = build_provider("openai", api_key="test-key")
+    provider.client = FakeChat(content="", finish_reason="length")
+    with pytest.raises(ModelOutputError):
+        provider.complete_text("system", "user")
+
+
+def test_claude_completion_with_only_thinking_raises():
+    llm = GradingLLM(api_key="test-key")
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="thinking", thinking="...")], stop_reason="max_tokens"
+    )
+    llm.client = SimpleNamespace(messages=SimpleNamespace(create=lambda **_: response))
+    with pytest.raises(ModelOutputError):
+        llm.complete_text("system", "user")
+
+
+def test_empty_summary_falls_back_to_capped_sample_with_note(monkeypatch):
+    monkeypatch.setattr(config, "MAX_SAMPLE_CHARS", 5_000)
+
+    class Grader:
+        label = "primary"
+
+        def complete_text(self, system, user, max_tokens=1200):
+            if "High Distinction" in user:
+                raise ModelOutputError("model returned an empty completion")
+            return "DI profile"
+
+    samples = {"HD": "H" * 9_000, "DI": "D" * 9_000}
+    profiles, used = summarize_samples_with_fallback(
+        [ProviderSpec("p", label="primary"), ProviderSpec("q", label="secondary")],
+        samples, COMPONENTS, builder=lambda spec: Grader(),
+    )
+    assert used == "primary"
+    assert profiles["DI"] == "DI profile"
+    hd = profiles["HD"]
+    assert "H" * 4_000 in hd                 # the original sample is kept...
+    assert hd.count("H") <= 5_000            # ...capped like any raw sample
+    assert hd.startswith("[") and "summary" in hd.lower()  # with a visible note

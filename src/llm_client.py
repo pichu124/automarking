@@ -91,7 +91,13 @@ class GradingLLM:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        return "".join(b.text for b in response.content if b.type == "text").strip()
+        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        if not text:
+            # Thinking can consume the whole budget (stop_reason "max_tokens").
+            raise ModelOutputError(
+                f"model returned an empty completion (stop_reason={response.stop_reason})"
+            )
+        return text
 
     # --- Pass 1: grade one report -----------------------------------------
 

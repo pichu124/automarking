@@ -224,7 +224,14 @@ class OpenAICompatibleProvider:
             max_tokens=max_tokens,
             temperature=self.temperature,
         )
-        return (resp.choices[0].message.content or "").strip()
+        choice = resp.choices[0]
+        text = (choice.message.content or "").strip()
+        if not text:
+            # Reasoning can consume the whole budget (finish_reason "length").
+            raise ModelOutputError(
+                f"model returned an empty completion (finish_reason={choice.finish_reason})"
+            )
+        return text
 
     def _chat_json(self, system: str, user: str, max_tokens: int) -> dict:
         messages = [

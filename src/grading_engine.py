@@ -37,7 +37,7 @@ from .document_parser import ParsedDocument
 from .estimator import CHARS_PER_TOKEN
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
 from . import config
-from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user
+from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user, cap_text
 from .providers import ModelOutputError, build_provider
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -546,9 +546,20 @@ def summarize_samples_with_fallback(
                 if progress_callback:
                     progress_callback(idx, total, f"Reading {SAMPLE_LEVELS[key]} sample")
                 user = build_sample_summary_user(SAMPLE_LEVELS[key], body, components)
-                profiles[key] = grader.complete_text(
-                    SAMPLE_SUMMARY_SYSTEM, user, config.SAMPLE_SUMMARY_MAX_TOKENS
-                )
+                try:
+                    profiles[key] = grader.complete_text(
+                        SAMPLE_SUMMARY_SYSTEM, user, config.SAMPLE_SUMMARY_MAX_TOKENS
+                    )
+                except ModelOutputError:
+                    # An empty summary (e.g. a reasoning model spent its whole
+                    # budget thinking) must not silently drop this anchor: keep
+                    # the sample itself, capped as a raw sample would be, with a
+                    # note the professor sees under "Review anchor profiles".
+                    profiles[key] = (
+                        "[Anchor profile unavailable: the model's summary came "
+                        "back empty, so the original sample text is used.]\n\n"
+                        + cap_text(body, config.MAX_SAMPLE_CHARS)
+                    )
             if progress_callback:
                 progress_callback(total, total, "Done")
             return profiles, spec.display
