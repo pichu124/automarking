@@ -254,3 +254,23 @@ def test_grading_run_warns_not_to_interact_until_done(monkeypatch):
     assert any("until grading finishes" in w for w in seen_while_grading)
     assert "until grading finishes" not in _warnings(at)  # gone once done
 
+
+# --- 6. GRADING_MODEL from .env reaches the Claude preset ---------------------
+
+def test_grading_model_from_dotenv_overrides_the_claude_default():
+    # app.py loads .env itself; simulate a .env setting GRADING_MODEL without
+    # touching the real file, in a fresh interpreter (presets build at import).
+    script = (
+        "import os, runpy, dotenv\n"
+        "dotenv.load_dotenv = lambda *a, **k: os.environ.update(GRADING_MODEL='model-from-env')\n"
+        "runpy.run_path('app.py', run_name='app')\n"
+        "from src.providers import PROVIDER_PRESETS\n"
+        "print(PROVIDER_PRESETS['anthropic'].default_model)\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "GRADING_MODEL"}
+    out = subprocess.run(
+        [sys.executable, "-c", script], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "model-from-env"

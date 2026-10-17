@@ -18,6 +18,10 @@ from collections import Counter
 import streamlit as st
 from dotenv import load_dotenv
 
+# Before the src imports: src.config reads GRADING_MODEL / GRADING_EFFORT
+# from the environment when it is first imported.
+load_dotenv()
+
 import dataclasses
 
 from src import config
@@ -50,8 +54,6 @@ from src.grading_engine import (
     summarize_samples_with_fallback,
 )
 from src.providers import PROVIDER_PRESETS, preset_is_usable
-
-load_dotenv()
 
 st.set_page_config(page_title="AI Grading Studio", page_icon="🎓", layout="wide")
 

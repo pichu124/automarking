@@ -57,7 +57,7 @@ class ProviderPreset:
 PROVIDER_PRESETS: dict[str, ProviderPreset] = {
     "anthropic": ProviderPreset(
         key="anthropic", label="Anthropic Claude", kind="anthropic",
-        default_model="claude-opus-4-8", api_key_env="ANTHROPIC_API_KEY",
+        default_model=config.DEFAULT_MODEL, api_key_env="ANTHROPIC_API_KEY",
         note="Highest grading quality; prompt caching. Paid.",
     ),
     "gemini": ProviderPreset(
