@@ -172,3 +172,22 @@ def test_total_failure_on_first_run_is_an_error_not_a_failed_report(monkeypatch)
     assert "invalid x-api-key" in " | ".join(e.value for e in at.error)
     assert not [e for e in at.expander if "report(s) failed" in e.label]
 
+
+# --- 3. API key must not follow a provider switch -----------------------------
+
+def test_api_key_is_not_sent_to_a_different_provider(monkeypatch):
+    for var in ("GEMINI_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    at = _app()
+    at.sidebar.selectbox[0].set_value("gemini")
+    at.run()
+    [t for t in at.sidebar.text_input if t.label == "GEMINI_API_KEY"][0].input("AIza-FAKE")
+    at.run()
+    assert at.session_state["api_key"] == "AIza-FAKE"
+
+    at.sidebar.selectbox[0].set_value("groq")
+    at.run()
+
+    assert at.session_state["api_key"] == ""
+    assert "Set GROQ_API_KEY" in " | ".join(w.value for w in at.sidebar.warning)
+

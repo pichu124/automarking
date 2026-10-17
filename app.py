@@ -278,6 +278,8 @@ def sidebar() -> None:
         if st.session_state.get("_model_for") != provider_key:
             st.session_state["model"] = preset.default_model
             st.session_state["_model_for"] = provider_key
+            # A key pasted for one provider must never be sent to another.
+            st.session_state["api_key"] = ""
         st.text_input("Model", key="model")
 
         # API key — defaults to the relevant env var; hidden input to override.
