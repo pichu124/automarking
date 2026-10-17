@@ -33,6 +33,7 @@ ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]?([34]\d{6})(?!\d)")
 STRICT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]([34]\d{6})(?!\d)")
 DOC_EXTS = ("docx", "pdf", "txt", "md")
 SHEET_EXTS = ("xlsx", "xlsm", "xls", "xlsb", "csv")
+PACK_FILE_RE = re.compile(r"(report|slides)(_\d+)?\.txt|workbook_\d+\.txt|MANIFEST\.txt")
 
 
 def _orig_name(path: str) -> str:
@@ -83,13 +84,21 @@ def _pptx_text(data: bytes) -> str:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--work", required=True)
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
     os.makedirs(f"{a.work}/packs", exist_ok=True)
     reg_path = f"{a.work}/registry.json"
-    reg = json.load(open(reg_path)) if os.path.exists(reg_path) else {"files": {}, "students": {}, "unmatched": []}
+    reg = json.load(open(reg_path, encoding="utf-8")) if os.path.exists(reg_path) else {"files": {}, "students": {}, "unmatched": []}
+    # Rebuilding a pack deletes files in it, so a hand-edited id must name a
+    # folder directly inside packs/.
+    packs = os.path.realpath(f"{a.work}/packs")
+    bad = [s for s in reg["students"] if os.path.dirname(os.path.realpath(os.path.join(packs, s))) != packs]
+    if bad:
+        sys.exit(f"{reg_path}: student id(s) {bad} are not plain folder names - fix them and rerun.")
 
     for path in a.files:
         key = os.path.abspath(path)
@@ -115,7 +124,7 @@ def main() -> None:
                 text, info["sheets"] = _workbook_extract(data)
             except Exception as exc:  # fall back to the parser's text
                 info["sheets"] = [f"ERR {exc}"]
-        open(info["text_cache"], "w").write(text)
+        open(info["text_cache"], "w", encoding="utf-8").write(text)
         reg["files"][key] = info
         if info["sid"]:
             reg["students"].setdefault(info["sid"], {"files": []})["files"].append(key)
@@ -153,14 +162,19 @@ def main() -> None:
             still.extend(keys)
     reg["unmatched"] = still
 
-    # Rebuild every student's pack from the cache.
+    # Rebuild every student's pack from the cache. Drop the previously generated
+    # files first (a file moved to another student must not linger here); keep
+    # anything else, e.g. a note about a file sent outside the batch.
     for sid, st in reg["students"].items():
-        d = f"{a.work}/packs/{sid}"
+        d = os.path.join(packs, sid)
         os.makedirs(d, exist_ok=True)
+        for f in os.listdir(d):
+            if PACK_FILE_RE.fullmatch(f):
+                os.remove(os.path.join(d, f))
         man, nwb, ndoc, nppt = [], 0, 0, 0
         for key in st["files"]:
             i = reg["files"][key]
-            t = open(i["text_cache"]).read()
+            t = open(i["text_cache"], encoding="utf-8").read()
             if i["kind"] in DOC_EXTS:
                 ndoc += 1
                 name = "report.txt" if ndoc == 1 else f"report_{ndoc}.txt"
@@ -170,11 +184,11 @@ def main() -> None:
             else:
                 nwb += 1
                 name = f"workbook_{nwb}.txt"
-            open(f"{d}/{name}", "w").write(t)
+            open(f"{d}/{name}", "w", encoding="utf-8").write(t)
             man.append(f"{name} <- {i['orig']}")
-        open(f"{d}/MANIFEST.txt", "w").write("\n".join(man))
+        open(f"{d}/MANIFEST.txt", "w", encoding="utf-8").write("\n".join(man))
 
-    json.dump(reg, open(reg_path, "w"), indent=1)
+    json.dump(reg, open(reg_path, "w", encoding="utf-8"), indent=1)
     print(f"Students: {len(reg['students'])}")
     for sid, st in sorted(reg["students"].items()):
         fs = [reg["files"][k] for k in st["files"]]
