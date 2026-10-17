@@ -231,7 +231,9 @@ def test_new_batch_flags_previous_results(monkeypatch):
 # --- 5. The professor is told not to click while grading runs -----------------
 
 def _page_so_far():
-    """The page as rendered at this moment of the script run."""
+    """The page as rendered at this moment of the script run. Reaches into
+    AppTest's LocalScriptRunner (private, Streamlit 1.56) - AppTest only
+    exposes the page after the run ends."""
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     from streamlit.testing.v1.element_tree import parse_tree_from_messages
 
