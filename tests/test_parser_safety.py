@@ -1,0 +1,87 @@
+"""Parser safety: archives, PDFs and encrypted Office files from untrusted
+uploads must neither exhaust the server nor silently lose a student's work."""
+from __future__ import annotations
+
+import io
+import zipfile
+
+from src import document_parser as dp
+from src.document_parser import (
+    auto_group_labels,
+    group_by_labels,
+    parse_bytes,
+    text_health,
+)
+
+
+def _zip(members: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def _submissions(docs) -> list:
+    return group_by_labels(docs, auto_group_labels(docs))
+
+
+# --- Zips: nested student zips, bombs, nesting depth ---------------------------
+
+def test_nested_student_zips_keep_their_moodle_folder():
+    export = _zip({
+        "Alice Smith_123456_assignsubmission_file_/sub.zip":
+            _zip({"Assignment2.txt": "Alice's own essay " * 40}),
+        "Bob Jones_654321_assignsubmission_file_/sub.zip":
+            _zip({"Assignment2.txt": "Bob's own essay " * 40}),
+    })
+    docs = parse_bytes("moodle_export.zip", export)
+    assert [d.name for d in docs] == [
+        "Alice Smith_123456_assignsubmission_file_/sub/Assignment2.txt",
+        "Bob Jones_654321_assignsubmission_file_/sub/Assignment2.txt",
+    ]
+    subs = _submissions(docs)
+    assert len(subs) == 2
+    assert "Alice's own essay" in subs[0].text and "Bob" not in subs[0].text
+
+
+def test_oversized_zip_member_is_skipped_with_a_note():
+    buf = io.BytesIO()
+    chunk = b"A" * (1 << 20)
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("s1111111_report.txt", "a real essay " * 40)
+        # Streamed so the test itself never holds the bomb in memory.
+        with zf.open("s2222222_bomb.txt", "w") as f:
+            for _ in range(dp._MAX_MEMBER_BYTES // len(chunk) + 1):
+                f.write(chunk)
+    docs = {d.name: d.text for d in parse_bytes("class.zip", buf.getvalue())}
+    assert "a real essay" in docs["s1111111_report.txt"]
+    bomb = docs["s2222222_bomb.txt"]
+    assert len(bomb) < 1000
+    assert "too large" in bomb
+    assert text_health(bomb) == "read-failed"
+
+
+def test_zip_total_budget_is_shared_with_nested_zips(monkeypatch):
+    monkeypatch.setattr(dp, "_MAX_ZIP_TOTAL_BYTES", 2500)
+    member = "word " * 200  # 1000 bytes decompressed
+    export = _zip({
+        "a.txt": member,
+        "sub.zip": _zip({"b.txt": member, "c.txt": member}),
+    })
+    docs = {d.name: d.text for d in parse_bytes("export.zip", export)}
+    assert docs["a.txt"].startswith("word")
+    assert docs["sub/b.txt"].startswith("word")
+    assert "[Could not read" in docs["sub/c.txt"] and "too large" in docs["sub/c.txt"]
+
+
+def test_zip_nesting_deeper_than_lms_export_is_refused():
+    level3 = _zip({"deep.txt": "should never be opened"})
+    level2 = _zip({"inner.zip": level3, "essay.txt": "the student's essay " * 20})
+    export = _zip({"Alice_123456_assignsubmission_file_/sub.zip": level2})
+    docs = {d.name: d.text for d in parse_bytes("export.zip", export)}
+    folder = "Alice_123456_assignsubmission_file_/sub/"
+    assert set(docs) == {folder + "essay.txt", folder + "inner.zip"}
+    assert "the student's essay" in docs[folder + "essay.txt"]
+    assert "[Could not read" in docs[folder + "inner.zip"]
+    assert "nested" in docs[folder + "inner.zip"]

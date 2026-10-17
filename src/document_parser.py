@@ -24,6 +24,11 @@ _TEXT_EXTS = (".txt", ".md", ".csv")
 # normal path is not junk (tar-to-zip converters emit those) and must not cause
 # the member to be silently dropped.
 _SKIP_PREFIXES = ("__MACOSX/",)
+# Zip-bomb guards: uploads are untrusted and the server is shared — a 284 KB
+# zip can hold a 300 MB file, and a 42.zip-style archive nests without end.
+_MAX_MEMBER_BYTES = 50 * 1024 * 1024       # one decompressed file in a zip
+_MAX_ZIP_TOTAL_BYTES = 300 * 1024 * 1024   # all of one upload, nested included
+_MAX_ZIP_DEPTH = 2                         # LMS export zip -> a student's zip
 
 
 @dataclass
@@ -427,7 +432,33 @@ def parse_bytes(name: str, data: bytes) -> List[ParsedDocument]:
     return [ParsedDocument(name, text)]
 
 
-def _parse_zip(data: bytes) -> List[ParsedDocument]:
+def _read_member(
+    zf: zipfile.ZipFile, info: zipfile.ZipInfo, budget: List[int]
+) -> bytes:
+    """Decompress one member within the per-file and per-upload byte limits."""
+    limit = min(_MAX_MEMBER_BYTES, budget[0])
+    too_large = ValueError(
+        "too large to open safely inside a zip (limits: "
+        f"{_MAX_MEMBER_BYTES >> 20} MB per file, {_MAX_ZIP_TOTAL_BYTES >> 20} "
+        "MB per upload) - upload it separately or reduce its size"
+    )
+    if info.file_size > limit:
+        raise too_large
+    # The header's file_size is attacker-controlled: the bounded read enforces
+    # the limit even if it lies.
+    with zf.open(info) as member:
+        inner = member.read(limit + 1)
+    if len(inner) > limit:
+        raise too_large
+    budget[0] -= len(inner)
+    return inner
+
+
+def _parse_zip(
+    data: bytes, prefix: str = "", depth: int = 1, budget: List[int] | None = None
+) -> List[ParsedDocument]:
+    # One byte budget per top-level upload, shared by every nested zip.
+    budget = [_MAX_ZIP_TOTAL_BYTES] if budget is None else budget
     out: List[ParsedDocument] = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for info in zf.infolist():
@@ -438,16 +469,25 @@ def _parse_zip(data: bytes) -> List[ParsedDocument]:
                 continue
             # Normalise "./" and "../" prefixes instead of dropping the member
             # — nothing is extracted to disk, so the name is only a label.
-            member_name = re.sub(r"^(\.\.?/)+", "", info.filename) or base
+            # A nested zip's members keep its path as their folder: in LMS
+            # exports the student lives in "Name_ID_assignsubmission_file_/",
+            # and without it two students' "sub.zip/Report.docx" would merge.
+            name = prefix + (re.sub(r"^(\.\.?/)+", "", info.filename) or base)
             try:
-                # zf.read is inside the try: an encrypted member raises
+                # Reading is inside the try: an encrypted member raises
                 # RuntimeError, and one bad file must not sink the batch.
-                inner = zf.read(info)
-                out.extend(parse_bytes(member_name, inner))
+                if not name.lower().endswith(".zip"):
+                    out.extend(parse_bytes(name, _read_member(zf, info, budget)))
+                elif depth >= _MAX_ZIP_DEPTH:
+                    raise ValueError(
+                        f"zip nested more than {_MAX_ZIP_DEPTH} levels deep was "
+                        "not opened - extract it and upload its files directly"
+                    )
+                else:
+                    inner = _read_member(zf, info, budget)
+                    out.extend(_parse_zip(inner, name[:-4] + "/", depth + 1, budget))
             except Exception as exc:
-                out.append(
-                    ParsedDocument(member_name, f"[Could not read file: {exc}]")
-                )
+                out.append(ParsedDocument(name, f"[Could not read file: {exc}]"))
     return out
 
 
