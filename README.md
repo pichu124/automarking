@@ -280,6 +280,7 @@ Then in the browser:
 Run the tests with:
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 

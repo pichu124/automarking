@@ -1,0 +1,3 @@
+-r requirements.txt
+pytest>=8
+xlwt>=1.3  # test-only: writes legacy .xls fixtures

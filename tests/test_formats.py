@@ -6,6 +6,8 @@ import base64
 import io
 import zipfile
 
+import pytest
+
 from src.document_parser import (
     ParsedDocument,
     _looks_binary,
@@ -43,7 +45,7 @@ def test_csv_cp1252():
 # --- .xls (legacy) and .xlsb -------------------------------------------------
 
 def test_xls_legacy_reads_rows():
-    import xlwt  # test-only writer for legacy xls
+    xlwt = pytest.importorskip("xlwt")  # test-only writer for legacy xls
 
     book = xlwt.Workbook()
     sheet = book.add_sheet("Q1")

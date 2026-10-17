@@ -28,8 +28,13 @@ def test_app_boots_with_all_providers_listed(at):
 
 
 def test_every_provider_renders_without_exception(at):
+    from src.providers import PROVIDER_PRESETS
+
+    # AppTest's `options` are the format_func labels (Streamlit >= 1.4x), so
+    # drive the widget by the raw preset keys instead.
     sb = at.sidebar.selectbox[0]
-    for key in sb.options:
+    assert len(sb.options) == len(PROVIDER_PRESETS)
+    for key in PROVIDER_PRESETS:
         sb.set_value(key)
         at.run()
         assert not at.exception, f"provider {key}: {at.exception[0] if at.exception else ''}"
