@@ -3,6 +3,7 @@ uploads must neither exhaust the server nor silently lose a student's work."""
 from __future__ import annotations
 
 import io
+import sys
 import zipfile
 
 from src import document_parser as dp
@@ -124,3 +125,45 @@ def test_batch_names_without_collision_are_left_alone():
     assert [d.name for d in app._parse_batch(uploads)] == [
         "s1111111_report.txt", "s2222222_report.txt",
     ]
+
+
+# --- PDF: counting images must not decode them ---------------------------------
+
+def _pdf_with_images(n: int, image_stream: bytes, filter_: bytes = b"") -> bytes:
+    """A one-page PDF whose resources hold `n` 1x1 image XObjects."""
+    names = " ".join(f"/Im{i} {4 + i} 0 R" for i in range(n))
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] "
+        f"/Resources << /XObject << {names} >> >> >>".encode(),
+    ] + [
+        b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 "
+        b"/ColorSpace /DeviceGray /BitsPerComponent 8 %s/Length %d >>\n"
+        b"stream\n%s\nendstream" % (filter_, len(image_stream), image_stream)
+    ] * n
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (i, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1, xref,
+    )
+    return bytes(out)
+
+
+def test_pdf_images_are_counted_even_when_undecodable():
+    pdf = _pdf_with_images(2, b"not a jpeg", filter_=b"/Filter /DCTDecode ")
+    text = parse_bytes("scan.pdf", pdf)[0].text
+    assert "contains 2 embedded image(s)" in text
+
+
+def test_pdf_images_are_counted_without_pillow(monkeypatch):
+    for mod in ("PIL", "PIL.Image", "pypdf.generic._image_xobject"):
+        monkeypatch.setitem(sys.modules, mod, None)
+    text = parse_bytes("scan.pdf", _pdf_with_images(1, b"\x00"))[0].text
+    assert "contains 1 embedded image(s)" in text

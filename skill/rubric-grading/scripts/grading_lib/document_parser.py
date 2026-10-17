@@ -336,7 +336,9 @@ def _count_pdf_images(data: bytes) -> int:
         total = 0
         for page in reader.pages:
             try:
-                total += sum(1 for _ in page.images)
+                # len() counts the image ids without decoding a single image
+                # (iterating decodes each one, and yields nothing without Pillow).
+                total += len(page.images)
             except Exception:
                 continue
         return total
