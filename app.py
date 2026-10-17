@@ -555,11 +555,22 @@ def calibration_data_ui() -> None:
                         _provider_chain(), st.session_state["rubric_text"]
                     )
                     st.session_state["components"] = rubric.components
+                    st.session_state["_components_rubric"] = _sample_fingerprint(
+                        st.session_state["rubric_text"]
+                    )
                     st.caption(f"Structured with: {used}")
                 except Exception as exc:
                     st.error(f"Rubric structuring failed: {exc}")
 
     if st.session_state["components"]:
+        if st.session_state.get("_components_rubric") != _sample_fingerprint(
+            st.session_state["rubric_text"]
+        ):
+            st.warning(
+                "⚠️ Rubric changed since it was structured — click **🔍 "
+                "Structure rubric into components** again, or grading will pair "
+                "the new rubric text with these old components."
+            )
         st.success("Rubric components (weights sum to 100):")
         st.table(
             [
@@ -771,6 +782,11 @@ def _sample_fingerprint(text: str) -> str:
     return hashlib.sha1((text or "").strip().encode("utf-8", "replace")).hexdigest()
 
 
+def _docs_fingerprint(docs) -> str:
+    # Text included: re-uploading fixed files under the same names is a new batch.
+    return _sample_fingerprint("\0".join(f"{d.name}\0{d.text}" for d in docs))
+
+
 def _effective_samples() -> dict:
     """The reference samples grading will actually use.
 
@@ -944,6 +960,9 @@ def grade_ui() -> None:
             )
             if result.raw_grades:
                 st.session_state["batch_result"] = result
+                st.session_state["_batch_result_docs"] = _docs_fingerprint(
+                    st.session_state["documents"]
+                )
             else:
                 # Nothing graded (bad key, quota, …): say so loudly and keep
                 # any earlier results instead of replacing them with an empty
@@ -965,6 +984,14 @@ def _render_results() -> None:
     result = st.session_state.get("batch_result")
     if not result:
         return
+    if st.session_state.get("_batch_result_docs") != _docs_fingerprint(
+        st.session_state["documents"]
+    ):
+        st.warning(
+            "⚠️ These results are for a previous batch upload — the student "
+            "files (or their grouping) changed since grading. Run grading again "
+            "to grade the current batch."
+        )
 
     if result.provider_label:
         if result.fell_back_from:

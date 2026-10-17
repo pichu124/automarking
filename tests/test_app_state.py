@@ -191,3 +191,39 @@ def test_api_key_is_not_sent_to_a_different_provider(monkeypatch):
     assert at.session_state["api_key"] == ""
     assert "Set GROQ_API_KEY" in " | ".join(w.value for w in at.sidebar.warning)
 
+
+# --- 4. Stale rubric components / batch results are flagged ------------------
+
+def test_editing_the_rubric_flags_stale_components(monkeypatch):
+    monkeypatch.setattr(
+        ge, "structure_rubric_with_fallback",
+        lambda specs, text: (StructuredRubric(components=COMPONENTS), "Fake"),
+    )
+    at = _app()
+
+    def rubric_area():
+        return [t for t in at.text_area if "Rubric text" in t.label][0]
+
+    rubric_area().input("Analysis: 100")
+    at.run()
+    _click(at, "Structure rubric")
+    assert "Rubric changed" not in _warnings(at)
+
+    rubric_area().input("Analysis: 60\nReferencing: 40")
+    at.run()
+
+    assert "Rubric changed" in _warnings(at)
+    assert at.session_state["components"] == COMPONENTS  # flagged, not deleted
+
+
+def test_new_batch_flags_previous_results(monkeypatch):
+    _use_grader(monkeypatch, _Grades70())
+    at = _ready_app()
+    _click(at, "Run Two-Pass")
+    assert "previous batch" not in _warnings(at)
+
+    _upload_batch(at, ["delta.txt"])
+
+    assert "previous batch" in _warnings(at)
+    assert len(at.session_state["batch_result"].reports) == 3  # flagged, not deleted
+
