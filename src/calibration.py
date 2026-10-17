@@ -119,8 +119,10 @@ def _calibrate_once(
     order = sorted(range(n), key=lambda i: (raw_totals[i], -i), reverse=True)
     sorted_raw = [float(raw_totals[i]) for i in order]
 
-    n_hd = math.floor(cfg.hd_cap_fraction * n)
-    n_di = math.floor(cfg.di_cap_fraction * n)
+    # The epsilon stops float error flooring a whole place away (0.29 * 100 is
+    # 28.999999999999996).
+    n_hd = math.floor(cfg.hd_cap_fraction * n + 1e-9)
+    n_di = math.floor(cfg.di_cap_fraction * n + 1e-9)
 
     ceil_by_rank: List[float] = []
     for pos in range(n):
