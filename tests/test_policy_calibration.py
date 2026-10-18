@@ -313,3 +313,8 @@ def test_intake_pack_shows_formulas_saved_without_a_result(tmp_path):
     packs = list((tmp_path / "work" / "packs" / "s4123456").glob("workbook_*.txt"))
     assert packs, "intake must build a workbook extract"
     assert "Total | =SUM(1,2) | 7" in packs[0].read_text(encoding="utf-8")
+
+
+def test_table_cell_after_a_loose_id_label_is_not_a_student_id(tmp_path):
+    ids, _ = _intake_ids(tmp_path, "Order ID | 3456789\nPrepared by s4123456")
+    assert ids == ["s4123456"]

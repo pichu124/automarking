@@ -35,9 +35,11 @@ STRICT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]([34]\d{6})(?!\d)")
 # On the cover page (first 3000 chars) a bare number counts only right after an
 # ID label - "capital AUD 3000000" must not become student s3000000.
 COVER_ID_RE = re.compile(
-    r"(?:(?:\bstudent\s*(?:id|number|no)(?:\s*(?:number|no))?|\bid\s*(?:no|number)|\bid"
+    # "|" joins docx table cells; accept it only after a student-specific label,
+    # so a bare "ID" cell ("Order ID | 3456789") is not taken as the student's.
+    r"(?:(?:\bstudent\s*(?:id|number|no)(?:\s*(?:number|no))?|\bid\s*(?:no|number)"
     r"|\bm[ãa]\s*sv|\bmssv|\bm[ãa]\s*s[ốo]\s*sinh\s*vi[êe]n)[\s:.#|-]*[sS]?"
-    r"|(?<![A-Za-z0-9])[sS])([34]\d{6})(?!\d)",
+    r"|\bid[\s:.#-]*[sS]?|(?<![A-Za-z0-9])[sS])([34]\d{6})(?!\d)",
     re.IGNORECASE,
 )
 DOC_EXTS = ("docx", "pdf", "txt", "md")
