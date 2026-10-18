@@ -246,6 +246,10 @@ def _grade(provider) -> dict:
 def test_deepseek_output_tokens_clamped_to_preset_cap():
     sent = _grade(build_provider("deepseek", api_key="test-key"))
     assert sent["max_tokens"] == 8192
+    # deepseek-reasoner allows 64K and spends its chain of thought from the
+    # same budget, so the chat model's cap must not truncate it.
+    sent = _grade(build_provider("deepseek", model="deepseek-reasoner", api_key="test-key"))
+    assert sent["max_tokens"] == config.GRADING_MAX_TOKENS
 
 
 def test_openai_reasoning_models_use_max_completion_tokens_without_temperature():

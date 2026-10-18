@@ -50,7 +50,7 @@ class ProviderPreset:
     free: bool = False
     note: str = ""
     api_key_optional: bool = False  # e.g. local Ollama needs no real key
-    max_output_tokens: Optional[int] = None  # API's hard cap on max_tokens
+    max_output_tokens: Optional[int] = None  # default_model's hard cap on max_tokens
 
 
 # Ordered so the UI can show free/local options prominently.
@@ -329,7 +329,11 @@ def build_provider(
         base_url=resolved_base_url,
         temperature=temperature,
         max_retries=max_retries,
-        max_output_tokens=preset.max_output_tokens,
+        # The cap belongs to the default model (deepseek-chat: 8192); others
+        # on the same API differ (deepseek-reasoner allows 64K).
+        max_output_tokens=(
+            preset.max_output_tokens if model == preset.default_model else None
+        ),
     )
 
 
