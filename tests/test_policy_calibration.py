@@ -209,3 +209,33 @@ def test_export_shows_marks_on_the_rubric_scale(tmp_path):
         rows = table.rows[1:]
         assert [r.cells[2].text for r in rows] == ["25", "15"]
         assert abs(sum(float(r.cells[1].text) for r in rows) - shown) < 0.05
+
+
+# --- D: bare student IDs only after a label -----------------------------------
+
+def _intake_ids(tmp_path, text):
+    src = tmp_path / "report_alpha.txt"
+    src.write_text(text, encoding="utf-8")
+    code, stdout, err = run("intake.py", "--work", tmp_path / "work", src)
+    assert code == 0, err
+    reg = json.loads((tmp_path / "work" / "registry.json").read_text(encoding="utf-8"))
+    return sorted(reg["students"]), stdout
+
+
+def test_bare_number_without_label_is_not_a_student_id(tmp_path):
+    ids, stdout = _intake_ids(tmp_path, "Portfolio plan\nInitial capital AUD 3000000 in equities.")
+    assert ids == [] and "UNMATCHED: report_alpha.txt" in stdout
+
+
+@pytest.mark.parametrize("label", [
+    "Student ID:", "student id -", "Student No.", "Student number", "ID:", "ID No:",
+    "Mã SV:", "MSSV", "Mã số sinh viên:", unicodedata.normalize("NFD", "Mã số sinh viên:"),
+])
+def test_bare_number_after_a_label_is_the_student_id(tmp_path, label):
+    ids, _ = _intake_ids(tmp_path, f"Initial capital AUD 3000000\n{label} 4123456\n")
+    assert ids == ["s4123456"]
+
+
+def test_s_prefixed_id_still_found_anywhere(tmp_path):
+    ids, _ = _intake_ids(tmp_path, "capital 3000000 " + "x " * 3000 + "by s4123456")
+    assert ids == ["s4123456"]

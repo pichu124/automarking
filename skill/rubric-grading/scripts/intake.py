@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +32,13 @@ ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]?([34]\d{6})(?!\d)")
 # In the body only an explicit "s"-prefixed ID counts - bare 7-digit numbers
 # occur all the time in spreadsheet data.
 STRICT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]([34]\d{6})(?!\d)")
+# On the cover page (first 3000 chars) a bare number counts only right after an
+# ID label - "capital AUD 3000000" must not become student s3000000.
+COVER_ID_RE = re.compile(
+    r"(?:(?:\bstudent\s*(?:id|number|no)|\bid\s*no|\bid|\bm[ãa]\s*sv|\bmssv"
+    r"|\bm[ãa]\s*s[ốo]\s*sinh\s*vi[êe]n)[\s:.#-]*[sS]?|(?<![A-Za-z0-9])[sS])([34]\d{6})(?!\d)",
+    re.IGNORECASE,
+)
 DOC_EXTS = ("docx", "pdf", "txt", "md")
 SHEET_EXTS = ("xlsx", "xlsm", "xls", "xlsb", "csv")
 PACK_FILE_RE = re.compile(r"(report|slides)(_\d+)?\.txt|workbook_\d+\.txt|MANIFEST\.txt")
@@ -114,7 +122,8 @@ def main() -> None:
         else:
             text = parse_bytes(orig, data)[0].text
             info["health"] = text_health(text) if kind in DOC_EXTS else None
-        m = ID_RE.search(orig) or (ID_RE.search(text[:3000]) if kind in DOC_EXTS else None) or STRICT_ID_RE.search(text)
+        cover = unicodedata.normalize("NFC", text[:3000]) if kind in DOC_EXTS else ""
+        m = ID_RE.search(orig) or COVER_ID_RE.search(cover) or STRICT_ID_RE.search(text)
         info["sid"] = ("s" + m.group(1)) if m else None
         if kind in DOC_EXTS:
             info["words"] = len(re.sub(r"\[NOTE:[^\]]*\]", "", text).split())

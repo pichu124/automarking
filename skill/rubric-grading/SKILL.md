@@ -41,7 +41,9 @@ python scripts/intake.py --work WORK path/to/upload1.docx path/to/upload1.xlsx .
 ```
 
 Run it on every new batch; it merges into `WORK/registry.json`. It groups
-files by student ID (in the filename, else in the text), falls back to shared
+files by student ID (in the filename, else in the text: an s-prefixed ID
+anywhere, or a bare number right after a label such as "Student ID" or "MSSV"
+on the cover page), falls back to shared
 filename stems for ID-less files, and builds `WORK/packs/<id>/` (report text,
 curated workbook extracts, slide text). After each batch, show the professor a
 short table: student, files matched, and flags - missing spreadsheet, missing
