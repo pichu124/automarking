@@ -277,3 +277,9 @@ def test_is_provider_unhealthy_classification():
 
     assert _is_provider_unhealthy(AuthenticationError())   # name token
     assert not _is_provider_unhealthy(ValidationError())   # content issue
+
+
+def test_recalibrate_keeps_the_resume_reuse_count():
+    from src.grading_engine import BatchResult, recalibrate
+
+    assert recalibrate(BatchResult(reused=2)).reused == 2

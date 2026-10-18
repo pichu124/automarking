@@ -1091,6 +1091,13 @@ def grade_ui() -> None:
                 )
                 st.rerun()
             elif result.raw_grades:
+                if done and result.provider_label == chain[start].display:
+                    result.reused = done
+                    # The resume began past the providers that failed the
+                    # stopped run; keep that in the fallback record.
+                    result.fell_back_from = (
+                        [s.display for s in chain[:start]] + result.fell_back_from
+                    )
                 st.session_state["batch_result"] = result
                 st.session_state["_batch_result_docs"] = _docs_fingerprint(docs)
                 st.session_state["_graded_pairs"] = {}
@@ -1181,6 +1188,11 @@ def _render_results() -> None:
             f"Actual tokens: {usage['input_tokens'] + cached:,} in "
             + (f"({cached:,} via the prompt cache) " if cached else "")
             + f"/ {usage['output_tokens']:,} out (incl. thinking) · {cost}"
+        )
+    if result.reused:
+        st.caption(
+            f"♻️ {result.reused} report(s) were graded in the stopped run and "
+            "reused here; their tokens were billed then and are not counted above."
         )
     if result.notes:
         with st.expander("Fallback / audit trail", expanded=bool(result.fell_back_from)):

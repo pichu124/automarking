@@ -298,6 +298,8 @@ def _resume_and_check(monkeypatch, at, done: int) -> None:
     assert resumed.graded == BATCH[done:]  # finished reports not paid for twice
     result = at.session_state["batch_result"]
     assert len(result.reports) == 3 and result.calibration.n == 3
+    assert result.reused == done  # their tokens were billed by the stopped run
+    assert any(f"{done} report(s) were graded in the stopped run" in c.value for c in at.caption)
     assert at.session_state["_graded_pairs"] == {}  # done: no stale resume offer
     assert not [b for b in at.button if "Resume" in b.label]
 
@@ -362,7 +364,10 @@ def test_resume_continues_with_the_provider_that_holds_the_grades(monkeypatch, d
     _click(at, "Resume (2 of 3 already graded)")
     assert graders["anthropic"].graded == []
     assert graders["gemini"].graded == ["gamma.txt"]
-    assert at.session_state["batch_result"].provider_label.startswith("Google Gemini")
+    result = at.session_state["batch_result"]
+    assert result.provider_label.startswith("Google Gemini")
+    # The resume skipped Claude because it failed the stopped run: say so.
+    assert [s for s in result.fell_back_from if s.startswith("Anthropic")]
 
 
 def test_start_over_regrades_every_report(monkeypatch, dummy_keys):

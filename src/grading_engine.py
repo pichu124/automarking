@@ -124,6 +124,9 @@ class BatchResult:
     # Reports still ungraded when the last provider gave out. Non-zero means
     # raw_grades is a partial, UNCALIBRATED cohort — resume, don't publish.
     pending: int = 0
+    # Reports a resume took from a stopped run's saved grades: billed by that
+    # run, so absent from ``usage`` above.
+    reused: int = 0
 
 
 # --- Provider-health classification ---------------------------------------
@@ -753,6 +756,7 @@ def recalibrate(
         raw_grades=list(result.raw_grades),
         usage=Counter(result.usage),
         cost_usd=result.cost_usd,
+        reused=result.reused,
     )
     if new.raw_grades:
         new.reports, new.calibration = _finalize(new.raw_grades, calibration_config)
