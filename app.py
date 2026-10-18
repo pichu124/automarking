@@ -35,6 +35,7 @@ _BASE_REPORT_CAP = config.BASE_MAX_REPORT_CHARS
 _BASE_SAMPLE_CAP = config.BASE_MAX_SAMPLE_CHARS
 from src.docx_export import build_grade_document, sanitize_text
 from src.document_parser import (
+    _STUDENT_ID_RE,
     HEALTH_HINTS,
     ParsedDocument,
     auto_group_labels,
@@ -94,16 +95,22 @@ def _uploads_text(uploads) -> str:
 
 
 def _parse_batch(uploads) -> list[ParsedDocument]:
-    """Parse the student uploads. When a file name is produced by several
-    uploads (s1111111.zip and s2222222.zip both holding report.docx), every
-    file of those uploads is prefixed with its upload's name: grouping keys on
-    the name, so duplicates would merge two students — and the prefix keeps
-    the student ID from the zip name and each workbook with its own report."""
+    """Parse the student uploads. A file name produced by several uploads
+    (s1111111.zip and s2222222.zip both holding report.docx) is prefixed with
+    its upload's name: grouping keys on the name, so duplicates would merge
+    two students. When that upload is named by a student ID, ALL its files get
+    the prefix, keeping each workbook with its own report; an ID-less zip
+    (late.zip) keeps the rest as-is, since a shared folder of a few files
+    would group several students as one submission."""
     parsed = [(up.name, d) for up in uploads for d in parse_upload(up)]
     counts = Counter(d.name for _, d in parsed)
-    clashing = {up_name for up_name, d in parsed if counts[d.name] > 1}
+    whole = {
+        up_name for up_name, d in parsed
+        if counts[d.name] > 1 and _STUDENT_ID_RE.search(up_name)
+    }
     return [
-        ParsedDocument(f"{up_name}/{d.name}", d.text) if up_name in clashing else d
+        ParsedDocument(f"{up_name}/{d.name}", d.text)
+        if counts[d.name] > 1 or up_name in whole else d
         for up_name, d in parsed
     ]
 

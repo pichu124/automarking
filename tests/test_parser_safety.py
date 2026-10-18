@@ -133,6 +133,23 @@ def test_each_workbook_stays_with_its_own_students_report():
     assert "first workings" in first.text and "second" not in first.text
 
 
+def test_clash_never_folders_an_id_less_zip_into_one_submission():
+    import app
+
+    # late.zip holds three students' files with no ID anywhere; its report.txt
+    # clashes with a loose upload. Putting the whole zip under "late.zip/"
+    # would make a small folder that groups as ONE submission.
+    uploads = [
+        _Upload("late.zip", _zip({"alice.txt": "alice wrote " * 40,
+                                  "bob.txt": "bob wrote " * 40,
+                                  "report.txt": "carol wrote " * 40})),
+        _Upload("report.txt", b"dave wrote " * 40),
+    ]
+    subs = _submissions(app._parse_batch(uploads))
+    assert len(subs) == 4
+    assert not any("alice" in s.text and "bob" in s.text for s in subs)
+
+
 def test_batch_names_without_collision_are_left_alone():
     import app
 
