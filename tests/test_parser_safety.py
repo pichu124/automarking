@@ -111,7 +111,7 @@ def test_same_named_files_in_two_student_zips_stay_two_submissions():
     ]
     docs = app._parse_batch(uploads)
     assert [d.name for d in docs] == [
-        "s1111111.zip/report.txt", "s2222222.zip/report.txt",
+        "report [s1111111.zip].txt", "report [s2222222.zip].txt",
     ]
     subs = _submissions(docs)
     assert len(subs) == 2
@@ -181,6 +181,12 @@ _BATCHES = {
          ("report.txt", "dave")], 4),
     "id-less per-student zips": (
         [("alice.zip", {"report.txt": "alice"}), ("bob.zip", {"report.txt": "bob"})], 2),
+    "id and id-less zips sharing one folder name": (
+        [("s1111111.zip", {"Assignment1/report.txt": "first"}),
+         ("s2222222.zip", {"Assignment1/report.txt": "second"}),
+         ("alice.zip", {"Assignment1/alice.txt": "alice"}),
+         ("bob.zip", {"Assignment1/bob.txt": "bob"}),
+         ("carol.zip", {"Assignment1/carol.txt": "carol"})], 5),
     "id-named per-student zips": (
         [("s1111111.zip", {"report.txt": "first", "workbook.txt": "first"}),
          ("s2222222.zip", {"report.txt": "second", "calc.txt": "second"})], 2),

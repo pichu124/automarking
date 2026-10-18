@@ -100,12 +100,12 @@ def _parse_batch(uploads) -> list[ParsedDocument]:
     Grouping and the grouping editor key on the file name, so two DIFFERENT
     files with one name (s1111111.zip and s2222222.zip both holding
     report.docx) would merge two students. Same name AND same text is one file
-    uploaded twice and is left as-is. For a real clash:
-    - an upload named by exactly one student ID puts all its files under that
-      name as a folder, so they group by the ID (workbook stays with report);
-    - anything else gets the upload's name tagged onto the FILE name, never a
-      new folder: a folder of a few files groups as one student, and moving
-      files between folders changes which folders count as small.
+    uploaded twice and is left as-is. For a real clash the upload's name is
+    tagged onto the FILE name ("report [s1111111.zip].docx") — never a folder:
+    an ID-less folder of a few files groups as one student, so moving files
+    between folders would merge students. An upload named by exactly one
+    student ID gets the tag on all its files, so they group by that ID and a
+    workbook stays with its report.
     """
     parsed = [(i, up.name, d) for i, up in enumerate(uploads) for d in parse_upload(up)]
     texts: dict[str, set] = {}
@@ -115,16 +115,17 @@ def _parse_batch(uploads) -> list[ParsedDocument]:
     upload_names = Counter(up.name for up in uploads)
     docs = []
     for i, up_name, d in parsed:
-        if i in clashing and len(set(_STUDENT_ID_RE.findall(up_name))) == 1:
-            d = ParsedDocument(f"{up_name}/{d.name}", d.text)
-        elif len(texts[d.name]) > 1:
-            # The tag must not add an ID or repeat for two uploads.
-            plain = upload_names[up_name] == 1 and not _STUDENT_ID_RE.search(up_name)
+        whole = i in clashing and len(set(_STUDENT_ID_RE.findall(up_name))) == 1
+        if whole or len(texts[d.name]) > 1:
+            # The tag must not add a stray ID or repeat for two uploads.
+            plain = whole or (
+                upload_names[up_name] == 1 and not _STUDENT_ID_RE.search(up_name)
+            )
             stem, ext = os.path.splitext(d.name)
-            d = ParsedDocument(f"{stem} [{up_name if plain else f'upload {i + 1}'}]{ext}", d.text)
+            tag = up_name if plain else f"upload {i + 1}"
+            d = ParsedDocument(f"{stem} [{tag}]{ext}", d.text)
         docs.append(d)
     return docs
-
 
 def _calibration_config():
     """Build a CalibrationConfig from the sidebar controls (or the defaults)."""
