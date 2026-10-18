@@ -157,6 +157,87 @@ def test_all_providers_fail():
     assert any("All configured providers failed" in e for e in result.errors)
 
 
+def test_last_provider_failure_keeps_partial_grades_and_resume_skips_them():
+    cache: dict = {}
+    specs = [ProviderSpec("primary", label="primary")]
+    flaky = FakeGrader("primary", unhealthy_on={"d3.txt"})
+    result = grade_batch_with_fallback(
+        specs, _session(), _docs(5), builder=_builder({"primary": flaky}), cache=cache
+    )
+    # Kept, but never calibrated on a partial cohort.
+    assert [name for name, _ in result.raw_grades] == ["d0.txt", "d1.txt", "d2.txt"]
+    assert result.pending == 2
+    assert result.reports == [] and result.calibration is None
+
+    healthy = FakeGrader("primary")
+    resumed = grade_batch_with_fallback(
+        specs, _session(), _docs(5), builder=_builder({"primary": healthy}), cache=cache
+    )
+    assert healthy.graded == ["d3.txt", "d4.txt"]  # finished reports not paid for twice
+    assert len(resumed.reports) == 5 and resumed.pending == 0
+    assert resumed.calibration is not None
+
+
+def test_saved_grades_are_never_reused_across_providers_or_changed_inputs():
+    cache: dict = {}
+    primary_spec = ProviderSpec("primary", label="primary")
+    grade_batch_with_fallback(
+        [primary_spec], _session(), _docs(5),
+        builder=_builder({"primary": FakeGrader("primary", unhealthy_on={"d3.txt"})}),
+        cache=cache,
+    )
+
+    # Primary dies again; the fallback re-grades the WHOLE cohort itself.
+    primary = FakeGrader("primary", unhealthy_on={"d3.txt"})
+    secondary = FakeGrader("secondary")
+    result = grade_batch_with_fallback(
+        [primary_spec, ProviderSpec("secondary", label="secondary")], _session(), _docs(5),
+        builder=_builder({"primary": primary, "secondary": secondary}), cache=cache,
+    )
+    assert primary.graded == []  # d0-d2 came from the cache
+    assert secondary.graded == [f"d{i}.txt" for i in range(5)]
+    assert result.provider_label == "secondary"
+
+    # Another model, or an edited report, is graded afresh.
+    other_model = FakeGrader("primary")
+    grade_batch_with_fallback(
+        [ProviderSpec("primary", model="other", label="primary")], _session(), _docs(5),
+        builder=_builder({"primary": other_model}), cache=cache,
+    )
+    assert len(other_model.graded) == 5
+    edited = FakeGrader("primary")
+    docs = _docs(5)
+    docs[0] = ParsedDocument("d0.txt", "fixed upload")
+    grade_batch_with_fallback(
+        [ProviderSpec("primary", model="other", label="primary")], _session(), docs,
+        builder=_builder({"primary": edited}), cache=cache,
+    )
+    assert edited.graded == ["d0.txt"]
+
+
+def test_a_reused_grade_keeps_its_audit_note():
+    class Overflow(FakeGrader):
+        def grade_report(self, *, source_name, report_text, **kw):
+            if len(report_text) > 10_000:
+                raise Exception("prompt is too long: 9000 tokens > 2000 maximum")
+            return super().grade_report(source_name=source_name, **kw)
+
+    cache: dict = {}
+    specs = [ProviderSpec("primary", label="primary")]
+    docs = [ParsedDocument("big.txt", "x" * 40_000)]
+    first = grade_batch_with_fallback(
+        specs, _session(), docs, builder=_builder({"primary": Overflow("primary")}), cache=cache
+    )
+    assert any("context window" in n for n in first.notes)
+
+    again = FakeGrader("primary")
+    resumed = grade_batch_with_fallback(
+        specs, _session(), docs, builder=_builder({"primary": again}), cache=cache
+    )
+    assert again.graded == []
+    assert any("context window" in n for n in resumed.notes)  # graded on trimmed text
+
+
 def test_summarize_samples_reads_full_and_compresses():
     from src.grading_engine import summarize_samples_with_fallback
 

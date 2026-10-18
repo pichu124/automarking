@@ -257,7 +257,127 @@ def test_grading_run_warns_not_to_interact_until_done(monkeypatch):
     assert "until grading finishes" not in _warnings(at)  # gone once done
 
 
-# --- 6. GRADING_MODEL from .env reaches the Claude preset ---------------------
+# --- 6. A cut-short run resumes without re-grading finished reports -----------
+
+class _Counting(_Grades70):
+    def __init__(self):
+        self.graded: list[str] = []
+
+    def grade_report(self, **kw):
+        self.graded.append(kw["source_name"])
+        return super().grade_report(**kw)
+
+
+class _QuotaExceeded(Exception):
+    status_code = 429
+
+
+class _QuotaAtGamma(_Counting):
+    """The only provider runs out of quota on the last report."""
+
+    def grade_report(self, **kw):
+        if kw["source_name"] == "gamma.txt":
+            raise _QuotaExceeded("Error code: 429 - quota exceeded")
+        return super().grade_report(**kw)
+
+
+@pytest.fixture
+def dummy_keys(monkeypatch):
+    """The repo .env holds real keys; load_dotenv never overrides these."""
+    from src.providers import PROVIDER_PRESETS
+
+    for preset in PROVIDER_PRESETS.values():
+        if preset.api_key_env:
+            monkeypatch.setenv(preset.api_key_env, "dummy-not-a-real-key")
+
+
+def _resume_and_check(monkeypatch, at, done: int) -> None:
+    resumed = _Counting()
+    _use_grader(monkeypatch, resumed)
+    _click(at, f"Resume ({done} of 3 already graded)")
+    assert resumed.graded == BATCH[done:]  # finished reports not paid for twice
+    result = at.session_state["batch_result"]
+    assert len(result.reports) == 3 and result.calibration.n == 3
+    assert at.session_state["_graded_pairs"] == {}  # done: no stale resume offer
+    assert not [b for b in at.button if "Resume" in b.label]
+
+
+def test_run_interrupted_by_a_click_resumes_without_regrading(monkeypatch, dummy_keys):
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from streamlit.runtime.scriptrunner_utils.script_requests import RerunData
+
+    class _ClickedMidRun(_Counting):
+        def grade_report(self, **kw):
+            if len(self.graded) == 1:
+                # What a click does mid-run: the next st.* call (the progress
+                # update after this report) raises RerunException.
+                get_script_run_ctx()._enqueue.__self__.request_rerun(RerunData())
+            return super().grade_report(**kw)
+
+    interrupted = _ClickedMidRun()
+    _use_grader(monkeypatch, interrupted)
+    at = _ready_app()
+    _click(at, "Run Two-Pass")
+
+    assert interrupted.graded == BATCH[:2]
+    assert at.session_state["batch_result"] is None
+    assert [b for b in at.button if "Start over" in b.label]
+    _resume_and_check(monkeypatch, at, done=2)
+
+
+def test_quota_on_the_last_provider_keeps_graded_reports_for_resume(monkeypatch, dummy_keys):
+    _use_grader(monkeypatch, _QuotaAtGamma())
+    at = _ready_app()
+    _click(at, "Run Two-Pass")
+
+    assert at.session_state["batch_result"] is None  # never calibrated on 2 of 3
+    errors = " | ".join(e.value for e in at.error)
+    assert "1 of 3 report(s) still ungraded" in errors
+    assert "quota exceeded" in errors
+    assert not [b for b in at.button if "Run Two-Pass" in b.label]  # Resume shown at once
+
+    _resume_and_check(monkeypatch, at, done=2)
+
+
+def test_resume_continues_with_the_provider_that_holds_the_grades(monkeypatch, dummy_keys):
+    class _NoQuota:
+        def grade_report(self, **kw):
+            raise _QuotaExceeded("Error code: 429 - quota exceeded")
+
+    graders = {"anthropic": _NoQuota(), "gemini": _QuotaAtGamma()}
+    monkeypatch.setattr(
+        ge, "grade_batch_with_fallback",
+        lambda specs, *a, **k: _REAL_GRADE(
+            specs, *a, builder=lambda spec: graders[spec.provider_key], **k
+        ),
+    )
+    at = _app(task_text="Write an essay.", rubric_text="Analysis: 100",
+              components=COMPONENTS, fallback_keys=["gemini"])
+    _upload_batch(at, BATCH)
+    _click(at, "Run Two-Pass")
+    assert "already graded by Google Gemini" in " | ".join(i.value for i in at.info)
+
+    # Claude is back, but paying it for all 3 would waste Gemini's 2 grades.
+    graders.update(anthropic=_Counting(), gemini=_Counting())
+    _click(at, "Resume (2 of 3 already graded)")
+    assert graders["anthropic"].graded == []
+    assert graders["gemini"].graded == ["gamma.txt"]
+    assert at.session_state["batch_result"].provider_label.startswith("Google Gemini")
+
+
+def test_start_over_regrades_every_report(monkeypatch, dummy_keys):
+    _use_grader(monkeypatch, _QuotaAtGamma())
+    at = _ready_app()
+    _click(at, "Run Two-Pass")
+
+    fresh = _Counting()
+    _use_grader(monkeypatch, fresh)
+    _click(at, "Start over")
+    assert fresh.graded == BATCH
+    assert len(at.session_state["batch_result"].reports) == 3
+
+
+# --- 7. GRADING_MODEL from .env reaches the Claude preset ---------------------
 
 def test_grading_model_from_dotenv_overrides_the_claude_default():
     # app.py loads .env itself; simulate a .env setting GRADING_MODEL without
