@@ -118,6 +118,21 @@ def test_same_named_files_in_two_student_zips_stay_two_submissions():
     assert "first student" in subs[0].text and "second" not in subs[0].text
 
 
+def test_each_workbook_stays_with_its_own_students_report():
+    import app
+
+    uploads = [
+        _Upload("s1111111.zip", _zip({"report.txt": "first student " * 40,
+                                      "workbook.txt": "first workings " * 40})),
+        _Upload("s2222222.zip", _zip({"report.txt": "second student " * 40,
+                                      "calc.txt": "second workings " * 40})),
+    ]
+    subs = _submissions(app._parse_batch(uploads))
+    assert len(subs) == 2
+    first = next(s for s in subs if "first student" in s.text)
+    assert "first workings" in first.text and "second" not in first.text
+
+
 def test_batch_names_without_collision_are_left_alone():
     import app
 

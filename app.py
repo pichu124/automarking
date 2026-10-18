@@ -94,14 +94,16 @@ def _uploads_text(uploads) -> str:
 
 
 def _parse_batch(uploads) -> list[ParsedDocument]:
-    """Parse the student uploads. A file name produced by several uploads
-    (s1111111.zip and s2222222.zip both holding report.docx) is prefixed with
-    its upload's name: grouping keys on the name, so duplicates would merge
-    two students — and the prefix keeps the student ID from the zip name."""
+    """Parse the student uploads. When a file name is produced by several
+    uploads (s1111111.zip and s2222222.zip both holding report.docx), every
+    file of those uploads is prefixed with its upload's name: grouping keys on
+    the name, so duplicates would merge two students — and the prefix keeps
+    the student ID from the zip name and each workbook with its own report."""
     parsed = [(up.name, d) for up in uploads for d in parse_upload(up)]
     counts = Counter(d.name for _, d in parsed)
+    clashing = {up_name for up_name, d in parsed if counts[d.name] > 1}
     return [
-        ParsedDocument(f"{up_name}/{d.name}", d.text) if counts[d.name] > 1 else d
+        ParsedDocument(f"{up_name}/{d.name}", d.text) if up_name in clashing else d
         for up_name, d in parsed
     ]
 
