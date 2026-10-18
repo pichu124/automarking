@@ -131,14 +131,6 @@ def test_calibrate_reports_real_caps_and_spread(tmp_path):
     assert '"hd_cap": 29' in stdout
 
 
-def test_calibrate_refuses_totals_not_out_of_100(tmp_path):
-    code, _, err, out = calibrate(tmp_path, maxes=(25, 15))
-
-    assert code != 0
-    assert "0-100" in err and "s4200000" in err
-    assert not out.exists()
-
-
 @pytest.mark.parametrize("flag,value", [("--fixed", "s4209999=50"), ("--no-floor", "s4209999")])
 def test_calibrate_rejects_unknown_student_ids(tmp_path, flag, value):
     code, _, err, out = calibrate(tmp_path, flag, value)

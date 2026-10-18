@@ -11,8 +11,10 @@ mean to 67 without changing anyone's band"):
         --preserve-bands previous_finals.json --mean 67 [--fixed ...] [--guard 1.5]
 
 Each RESULTS_DIR/*.json is one student: {"sid", "total", "components": [...]}.
-Totals must be on a 0-100 scale (component maxima summing to 100); otherwise,
-or for an unknown id in --fixed/--no-floor, it exits without writing anything.
+A rubric whose component maxima do not sum to 100 is calibrated as a percentage
+(100 x total / sum of maxima); finals, --fixed marks and the summary are all
+percentages, and export_docx.py converts them back to each student's own scale.
+For an unknown id in --fixed/--no-floor it exits without writing anything.
 Writes {"finals": {sid: final}, "summary": {...}} and prints a table.
 
 Standard mode = the app's engine: rank-preserving curve to the target mean,
@@ -84,14 +86,12 @@ def main() -> None:
         r = json.load(open(p, encoding="utf-8"))
         R[r["sid"]] = r
     maxima = {s: sum(float(c["max"]) for c in r["components"]) for s, r in R.items()}
-    off_scale = [f"{s} ({m:g})" for s, m in maxima.items() if abs(m - 100) > 0.5]
-    if off_scale:
-        sys.exit(
-            "calibrate.py: totals must be on a 0-100 scale - each result's component maxima "
-            f"must sum to 100, but these do not: {', '.join(off_scale)}. Convert those results "
-            "to a 0-100 scale and rerun. Nothing was written."
-        )
-    raw = {s: float(r["total"]) for s, r in R.items()}
+    no_max = [s for s, m in maxima.items() if m <= 0]
+    if no_max:
+        sys.exit(f"calibrate.py: no component maxima in {', '.join(no_max)}. Nothing was written.")
+    # Calibrate on percentages; a 0-100 rubric keeps its total exactly as given.
+    raw = {s: float(r["total"]) if abs(maxima[s] - 100) <= 0.5 else 100 * float(r["total"]) / maxima[s]
+           for s, r in R.items()}
     fixed = _kv(a.fixed)
     no_floor = {s.strip() for s in a.no_floor.split(",") if s.strip()}
     unknown = sorted((set(fixed) | no_floor) - set(raw))
@@ -172,7 +172,8 @@ def main() -> None:
     json.dump({"finals": finals, "summary": summary}, open(a.out, "w", encoding="utf-8"), indent=1)
     print(json.dumps(summary, indent=1))
     for s in sorted(finals, key=lambda s: -finals[s]):
-        print(f"{s:10s} raw {raw[s]:5.1f} -> {finals[s]:5.1f}")
+        scale = "" if abs(maxima[s] - 100) <= 0.5 else f" = {finals[s] * maxima[s] / 100:.1f}/{maxima[s]:g}"
+        print(f"{s:10s} raw {raw[s]:5.1f} -> {finals[s]:5.1f}{scale}")
     if cap_ties:
         print("Tied at the HD/DI cap boundary - held at the lower band: "
               + ", ".join(f"{s} (raw {r:g}, {held})" for s, r, held in cap_ties))

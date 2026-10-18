@@ -169,3 +169,43 @@ def test_preserve_bands_targets_the_mean_of_the_non_fixed(tmp_path):
     others = [v for s, v in finals.items() if s not in PINNED]
     assert abs(sum(others) / len(others) - 67) <= 0.1
     assert all(finals[s] == 35.0 for s in PINNED)
+
+
+# --- C: rubrics not out of 100 ------------------------------------------------
+
+def test_calibrate_converts_a_40_point_rubric_to_percent(tmp_path):
+    points = {sid: 16.0 + 1.25 * i for i, sid in enumerate(COHORT)}  # /40, exact in binary
+    percent = {sid: p * 2.5 for sid, p in points.items()}
+
+    code, stdout, err, out40 = calibrate(subdir(tmp_path, "p40"), totals=points, maxes=(25, 15))
+    assert code == 0, err
+    code, _, err, out100 = calibrate(subdir(tmp_path, "p100"), totals=percent)
+    assert code == 0, err
+
+    a, b = (json.loads(p.read_text(encoding="utf-8")) for p in (out40, out100))
+    assert a == b
+    assert "/40" in stdout
+
+
+def test_export_shows_marks_on_the_rubric_scale(tmp_path):
+    res = tmp_path / "results"
+    write_results(res, {"s4200001": 30.0, "s4200002": 22.0}, maxes=(25, 15))
+    write_results(res, {"s4200003": 50.0})
+    finals = tmp_path / "finals.json"
+    finals.write_text(json.dumps({"finals": {"s4200001": 77.2, "s4200002": 62.0, "s4200003": 82.0},
+                                  "summary": {}}), encoding="utf-8")
+    out = tmp_path / "grades.docx"
+
+    code, _, err = run("export_docx.py", "--results", res, "--finals", finals,
+                       "--title", "T", "--out", out)
+
+    assert code == 0, err
+    doc = Document(out)
+    totals = [p.text for p in doc.paragraphs if p.text.startswith("Total:")]
+    assert totals == ["Total: 82 / 100 - High Distinction",
+                      "Total: 30.9 / 40 (77.2%) - Distinction",
+                      "Total: 24.8 / 40 (62%) - Credit"]
+    for table, shown in zip(doc.tables[2:], (30.9, 24.8)):
+        rows = table.rows[1:]
+        assert [r.cells[2].text for r in rows] == ["25", "15"]
+        assert abs(sum(float(r.cells[1].text) for r in rows) - shown) < 0.05

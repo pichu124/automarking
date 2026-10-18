@@ -7,7 +7,9 @@ Usage:
 Per student: heading (name + ID), component table (Component | Score | Max |
 Professor's Notes) with component scores rescaled so they add up to the final
 total, the total with its band, and an "Assignment Comments" paragraph. A
-cohort summary opens the document. All text is sanitised to keyboard ASCII.
+rubric not out of 100 is shown on its own scale ("Total: 30.9 / 40 (77.2%)"),
+since finals.json holds percentages. A cohort summary opens the document. All
+text is sanitised to keyboard ASCII.
 """
 from __future__ import annotations
 
@@ -49,24 +51,30 @@ def main() -> None:
     fj = json.load(open(a.finals, encoding="utf-8"))
     finals, summ = fj["finals"], fj.get("summary", {})
 
-    reports, comments, idents = [], {}, {}
+    reports, comments, idents, scaled = [], {}, {}, {}
     for p in sorted(glob.glob(os.path.join(a.results, "*.json"))):
         r = json.load(open(p, encoding="utf-8"))
         sid, f = r["sid"], float(finals[r["sid"]])
         nm = names.get(sid) or r.get("student_name") or ""
         ident = f"{nm} ({sid})" if nm else sid
         comps = r["components"]
+        # Finals are percentages; a rubric not out of 100 is shown on its own scale.
+        m = sum(float(c["max"]) for c in comps)
+        on_100 = abs(m - 100) <= 0.5
+        pts = f if on_100 else round(f * m / 100, 1)
         new = rescale_components(
-            [c["score"] for c in comps], [c["max"] for c in comps], sum(c["score"] for c in comps), f
+            [c["score"] for c in comps], [c["max"] for c in comps], sum(c["score"] for c in comps), pts
         )
         reports.append(CalibratedReport(
             student_identifier=ident, source_name=sid,
             components=[ComponentGrade(name=c["name"], score=s, max_score=c["max"], notes=c.get("notes") or ["-"])
                         for c, s in zip(comps, new)],
-            raw_total=float(r["total"]), final_total=f,
+            raw_total=float(r["total"]) if on_100 else 100 * float(r["total"]) / m, final_total=f,
         ))
         comments[sanitize_text(ident)] = r.get("overall_comment", "")
         idents[sid] = ident
+        if not on_100:
+            scaled[sanitize_text(ident)] = f"Total: {pts:g} / {m:g} ({f:g}%) - {reports[-1].band}"
 
     vals = [r.final_total for r in reports]
     raws = [r.raw_total for r in reports]
@@ -86,16 +94,19 @@ def main() -> None:
     for p in list(doc.paragraphs):
         if p.style.name.startswith("Heading 1") and p.text in comments:
             cur = p.text
-        elif p.text.startswith("Total:") and cur and comments.get(cur):
-            node = copy.deepcopy(p._p)
-            p._p.addnext(node)
-            q = Paragraph(node, p._parent)
-            for run in q.runs[1:]:
-                run._r.getparent().remove(run._r)
-            q.runs[0].text = "Assignment Comments: " + sanitize_text(comments[cur])
-            q.runs[0].bold = False
-            q.runs[0].font.size = Pt(10.5)
-            q.runs[0].font.color.rgb = RGBColor(0, 0, 0)
+        elif p.text.startswith("Total:") and cur:
+            if cur in scaled:
+                p.runs[0].text = sanitize_text(scaled[cur])
+            if comments.get(cur):
+                node = copy.deepcopy(p._p)
+                p._p.addnext(node)
+                q = Paragraph(node, p._parent)
+                for run in q.runs[1:]:
+                    run._r.getparent().remove(run._r)
+                q.runs[0].text = "Assignment Comments: " + sanitize_text(comments[cur])
+                q.runs[0].bold = False
+                q.runs[0].font.size = Pt(10.5)
+                q.runs[0].font.color.rgb = RGBColor(0, 0, 0)
             cur = None
     doc.save(a.out)
     bad = sum(1 for p in Document(a.out).paragraphs for ch in p.text if ord(ch) > 127)

@@ -95,7 +95,10 @@ yourself: very low totals, a 0 on any criterion, anything that contradicts
 the grader's own evidence. Grep the report to confirm a claimed absence
 (e.g. "no ethics section") before accepting it.
 
-`calibrate.py` only accepts totals on a 0-100 scale (component maxima summing to 100) and stops otherwise.
+Rubrics not out of 100 are fine: `calibrate.py` calibrates each student's
+percentage (100 x total / sum of maxima), so `finals.json` and `--fixed` marks
+are percentages, and `export_docx.py` shows each total on the rubric's own
+scale with its percentage (e.g. "Total: 30.9 / 40 (77.2%)").
 
 ### 6. Calibrate
 
