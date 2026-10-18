@@ -38,6 +38,7 @@ from src.document_parser import (
     _STUDENT_ID_RE,
     HEALTH_HINTS,
     ParsedDocument,
+    _group_key,
     auto_group_labels,
     group_by_labels,
     parse_upload,
@@ -138,6 +139,25 @@ def _parse_batch(uploads) -> list[ParsedDocument]:
             d = ParsedDocument(f"{stem} [{tag(owner)}]{ext}", d.text)
         docs.append(d)
     return docs
+
+
+def _mixed_name_groups(auto_labels: dict, manual: dict) -> dict[str, list[str]]:
+    """Automatic groups whose Word/PDF files have different names.
+
+    An ID-less folder of a few files groups as one student — right for an LMS
+    per-student folder, wrong for a zipped "Late submissions" folder holding
+    Alice.docx and Bob.docx. Files the professor relabelled are left out, so
+    the warning clears once the group is split.
+    """
+    groups: dict[str, list[str]] = {}
+    for name, label in auto_labels.items():
+        if name not in manual and name.lower().endswith((".docx", ".pdf")):
+            groups.setdefault(label, []).append(name)
+    return {
+        label: names for label, names in groups.items()
+        if len({_group_key(n) for n in names}) > 1
+    }
+
 
 def _calibration_config():
     """Build a CalibrationConfig from the sidebar controls (or the defaults)."""
@@ -774,6 +794,18 @@ def batch_ui() -> None:
                     st.session_state.get("_group_editor_nonce", 0) + 1
                 )
                 st.rerun()
+
+    mixed = _mixed_name_groups(auto_labels, manual)
+    if mixed:
+        st.warning(
+            "⚠️ " + "; ".join(
+                f"'{label}' groups {len(names)} Word/PDF files with different "
+                f"names ({', '.join(n.rpartition('/')[2] for n in names)})"
+                for label, names in mixed.items()
+            )
+            + " — these may be different students. Give them different labels "
+            "in ✏️ Adjust grouping manually if so."
+        )
 
     st.session_state["documents"] = group_by_labels(
         raw_docs, {**auto_labels, **manual}
