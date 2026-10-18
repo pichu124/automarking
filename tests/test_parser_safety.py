@@ -187,6 +187,13 @@ _BATCHES = {
          ("alice.zip", {"Assignment1/alice.txt": "alice"}),
          ("bob.zip", {"Assignment1/bob.txt": "bob"}),
          ("carol.zip", {"Assignment1/carol.txt": "carol"})], 5),
+    "duplicate download plus a differing late copy": (
+        [("batch.zip", {"alice.txt": "alice", "bob.txt": "bob"}),
+         ("batch (1).zip", {"alice.txt": "alice", "bob.txt": "bob"}),
+         ("late.zip", {"alice.txt": "alicelate"})], 3),
+    "same zip twice plus a differing loose copy": (
+        [("batch.zip", {"alice.txt": "alice", "bob.txt": "bob"})] * 2
+        + [("alice.txt", "alicelate")], 3),
     "id-named per-student zips": (
         [("s1111111.zip", {"report.txt": "first", "workbook.txt": "first"}),
          ("s2222222.zip", {"report.txt": "second", "calc.txt": "second"})], 2),

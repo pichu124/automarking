@@ -111,19 +111,31 @@ def _parse_batch(uploads) -> list[ParsedDocument]:
     texts: dict[str, set] = {}
     for _, _, d in parsed:
         texts.setdefault(d.name, set()).add(d.text)
-    clashing = {i for i, _, d in parsed if len(texts[d.name]) > 1}
-    upload_names = Counter(up.name for up in uploads)
+    names = [up.name for up in uploads]
+    upload_names = Counter(names)
+    whole = {
+        i for i, _, d in parsed
+        if len(texts[d.name]) > 1 and len(set(_STUDENT_ID_RE.findall(names[i]))) == 1
+    }
+    # Identical copies share the tag of the first upload holding that text, so
+    # a duplicate download still merges instead of being graded twice.
+    first: dict[tuple, int] = {}
+    for i, _, d in parsed:
+        first.setdefault((d.name, d.text), i)
+
+    def tag(i: int) -> str:
+        # Never a stray student ID, never the same tag for two uploads.
+        name = names[i]
+        if i in whole or (upload_names[name] == 1 and not _STUDENT_ID_RE.search(name)):
+            return name
+        return f"upload {i + 1}"
+
     docs = []
-    for i, up_name, d in parsed:
-        whole = i in clashing and len(set(_STUDENT_ID_RE.findall(up_name))) == 1
-        if whole or len(texts[d.name]) > 1:
-            # The tag must not add a stray ID or repeat for two uploads.
-            plain = whole or (
-                upload_names[up_name] == 1 and not _STUDENT_ID_RE.search(up_name)
-            )
+    for i, _, d in parsed:
+        if i in whole or len(texts[d.name]) > 1:
             stem, ext = os.path.splitext(d.name)
-            tag = up_name if plain else f"upload {i + 1}"
-            d = ParsedDocument(f"{stem} [{tag}]{ext}", d.text)
+            owner = i if i in whole else first[(d.name, d.text)]
+            d = ParsedDocument(f"{stem} [{tag(owner)}]{ext}", d.text)
         docs.append(d)
     return docs
 
