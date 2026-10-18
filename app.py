@@ -1063,6 +1063,29 @@ def grade_ui() -> None:
     _render_results()
 
 
+def _cap_ties_message(calib, raw_grades=()) -> str | None:
+    """Students whose raw total tied with others across an HD/DI cap boundary
+    and were held, as a group, at the lower band — for the professor to review.
+    ``cap_ties`` indexes the raw-score order, which ``raw_grades`` keeps."""
+    ties = getattr(calib, "cap_ties", None)
+    if not ties:
+        return None
+
+    def who(i: int) -> str:
+        if i < len(raw_grades):
+            source, graded = raw_grades[i]
+            return graded.student_identifier or source
+        return f"#{i + 1}"
+
+    listed = "; ".join(f"{who(i)} (raw {raw:g}, held at {band})" for i, raw, band in ties)
+    return (
+        "⚖️ **Tied at a cap boundary.** These students had the same raw score "
+        "as students above the HD/DI cap, so the whole tie was held at the lower "
+        f"band (the cap is a hard maximum): {listed}. Raise any of them by hand "
+        "if you decide otherwise."
+    )
+
+
 def _render_results() -> None:
     result = st.session_state.get("batch_result")
     if not result:
@@ -1128,6 +1151,9 @@ def _render_results() -> None:
                 f"widened to {calib.di_cap} place(s) (the 'Distinction cap when "
                 "no HD' setting)."
             )
+        ties = _cap_ties_message(calib, result.raw_grades)
+        if ties:
+            st.warning(ties)
         if calib.low_discrimination:
             st.warning(
                 f"⚠️ **Low differentiation.** The model gave very similar raw "

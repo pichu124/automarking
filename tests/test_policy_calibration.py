@@ -239,3 +239,19 @@ def test_bare_number_after_a_label_is_the_student_id(tmp_path, label):
 def test_s_prefixed_id_still_found_anywhere(tmp_path):
     ids, _ = _intake_ids(tmp_path, "capital 3000000 " + "x " * 3000 + "by s4123456")
     assert ids == ["s4123456"]
+
+
+# --- A (app): tie cases are listed for the professor ----------------------------
+
+def test_app_lists_students_held_at_the_lower_band(monkeypatch):
+    for key in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(key, "dummy")
+    import app
+    from src.calibration import CalibrationConfig, calibrate_scores
+
+    raw = [85, 85] + [60] * 8
+    report = calibrate_scores(raw, CalibrationConfig(hd_cap_fraction=0.1))[1]
+    assert report.cap_ties, "fixture must straddle the HD cap"
+    message = app._cap_ties_message(report)
+    assert "lower band" in message and "85" in message
+    assert app._cap_ties_message(calibrate_scores([90, 70, 60], CalibrationConfig())[1]) is None
