@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Protocol, Sequence
 
 from .calibration import CalibrationConfig, CalibrationReport, calibrate_scores, rescale_components
 from .document_parser import ParsedDocument
-from .estimator import CHARS_PER_TOKEN
+from .estimator import CHARS_PER_TOKEN, actual_cost_usd
 from .models import CalibratedReport, ComponentGrade, GradingResult, RubricComponent
 from . import config
 from .prompts import SAMPLE_SUMMARY_SYSTEM, build_sample_summary_user, cap_text
@@ -112,6 +113,11 @@ class BatchResult:
     # Pass-1 output kept so the cohort can be re-calibrated (new mean/caps/
     # boundary settings) WITHOUT re-calling the LLM — i.e. for free.
     raw_grades: List[tuple] = field(default_factory=list)  # (source_name, GradingResult)
+    # Tokens billed by every provider tried for this run (discarded fallback
+    # attempts included), priced from the estimator's table; cost None = some
+    # tokens came from a model the table can't price.
+    usage: Counter = field(default_factory=Counter)
+    cost_usd: Optional[float] = 0.0
 
 
 # --- Provider-health classification ---------------------------------------
@@ -445,6 +451,16 @@ def _label_for(grader: Grader) -> str:
     return getattr(grader, "label", type(grader).__name__)
 
 
+def _add_usage(result: BatchResult, grader: Grader, spec: ProviderSpec) -> None:
+    """Fold one provider's token counters into the run's totals and cost."""
+    usage = getattr(grader, "usage", None) or Counter()
+    if not usage.total():
+        return
+    result.usage.update(usage)
+    cost = actual_cost_usd(spec.provider_key, spec.model, usage)
+    result.cost_usd = None if cost is None or result.cost_usd is None else result.cost_usd + cost
+
+
 # --- Public API: single provider ------------------------------------------
 
 def grade_batch(
@@ -534,6 +550,8 @@ def grade_batch_with_fallback(
                    "scores consistent." if has_next else "no fallback provider left.")
             )
             continue
+        finally:
+            _add_usage(result, grader, spec)  # discarded work was billed too
 
         if not raw_results:
             attempted.append(label)
@@ -645,6 +663,8 @@ def recalibrate(
         provider_label=result.provider_label,
         fell_back_from=list(result.fell_back_from),
         raw_grades=list(result.raw_grades),
+        usage=Counter(result.usage),
+        cost_usd=result.cost_usd,
     )
     if new.raw_grades:
         new.reports, new.calibration = _finalize(new.raw_grades, calibration_config)

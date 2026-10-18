@@ -895,6 +895,7 @@ def _estimate_ui(session: GradingSession) -> None:
     docs = st.session_state["documents"]
     provider_key = st.session_state.get("provider_key", "anthropic")
     preset = PROVIDER_PRESETS[provider_key]
+    effort = st.session_state.get("effort", DEFAULT_EFFORT)
     est = estimate_batch(
         provider_key=provider_key,
         provider_label=preset.label,
@@ -903,7 +904,9 @@ def _estimate_ui(session: GradingSession) -> None:
         report_texts=[d.text for d in docs],
         n_components=len(session.components),
         pricing=PROVIDER_PRICING.get(provider_key),
+        effort=effort,
     )
+    thinking = est.thinking_tokens_per_report * est.n_reports
     with st.expander("📊 Estimate cost & time (before you run)", expanded=True):
         cols = st.columns(4)
         cols[0].metric("Reports", est.n_reports)
@@ -911,8 +914,15 @@ def _estimate_ui(session: GradingSession) -> None:
         cols[2].metric("Est. time", est.time_label)
         cols[3].metric(
             "Tokens in/out",
-            f"{est.input_tokens_billed:,} / {est.output_tokens:,}",
+            f"{est.input_tokens_billed:,} / {est.output_tokens:,}"
+            + (f"–{est.output_tokens + thinking:,}" if thinking else ""),
         )
+        if thinking:
+            st.caption(
+                f"💭 The upper figures allow ~{est.thinking_tokens_per_report:,} "
+                f"thinking tokens per report at **{effort}** effort (billed as "
+                "output) — a guess; the actual tokens appear after the run."
+            )
 
         # Transparency: tell the professor exactly what (if anything) is trimmed.
         cap_r, cap_s = config.MAX_REPORT_CHARS, config.MAX_SAMPLE_CHARS
@@ -966,7 +976,7 @@ def _estimate_ui(session: GradingSession) -> None:
                 "tokens) is written once, then read at ~0.1× for every later report."
             )
         st.markdown("**Compare providers** — default model, cheapest first:")
-        comparison = compare_providers(session, docs, PROVIDER_PRESETS)
+        comparison = compare_providers(session, docs, PROVIDER_PRESETS, effort=effort)
         st.dataframe(
             [
                 {
@@ -1075,6 +1085,15 @@ def _render_results() -> None:
             )
         else:
             st.caption(f"Graded by: {result.provider_label}")
+    usage = result.usage
+    if usage.total():
+        cached = usage["cache_creation_input_tokens"] + usage["cache_read_input_tokens"]
+        cost = "unknown price" if result.cost_usd is None else f"≈ ${result.cost_usd:,.2f}"
+        st.caption(
+            f"Actual tokens: {usage['input_tokens'] + cached:,} in "
+            + (f"({cached:,} via the prompt cache) " if cached else "")
+            + f"/ {usage['output_tokens']:,} out (incl. thinking) · {cost}"
+        )
     if result.notes:
         with st.expander("Fallback / audit trail", expanded=bool(result.fell_back_from)):
             for note in result.notes:

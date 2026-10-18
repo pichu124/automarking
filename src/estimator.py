@@ -5,22 +5,37 @@ heuristic — accurate enough to compare providers and avoid surprises before
 spending money. The Claude path models prompt caching: the large static context
 (persona + task + rubric + reference samples) is written to cache once and read
 cheaply for every subsequent report.
+
+Claude's adaptive thinking is billed as output tokens but its length is
+unknown up front, so a Claude estimate is a LOW–HIGH range: the high end adds a
+per-report thinking allowance that grows with the effort setting.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Mapping, Sequence
 
 from . import config
 from .config import DEFAULT_PRICING, PROVIDER_PRICING, ModelPricing
 from .document_parser import ParsedDocument
 from .prompts import build_grading_system_text, cap_text
+from .providers import PROVIDER_PRESETS
 
 # Rough average across English prose + code; good enough for an estimate.
 CHARS_PER_TOKEN = 4.0
 # Per-report prompt overhead (the user-message wrapper around the report).
 USER_WRAPPER_TOKENS = 80
+# Thinking tokens per graded report, by Claude effort level (high end of the
+# range). ponytail: guesses, not measurements — recalibrate from the "Actual
+# tokens" line shown after a run (output tokens per report minus the JSON).
+THINKING_TOKENS_PER_REPORT = {
+    "low": 1_000,
+    "medium": 2_500,
+    "high": 5_000,
+    "xhigh": 8_000,
+    "max": 12_000,
+}
 
 
 def estimate_tokens(text: str) -> int:
@@ -54,16 +69,22 @@ class BatchEstimate:
     # Ollama's num_ctx) — the static context + one report + the JSON output.
     tokens_per_request_avg: int = 0
     tokens_per_request_max: int = 0
+    # High end of the range: the same batch plus a thinking allowance.
+    thinking_tokens_per_report: int = 0
+    cost_usd_high: float = 0.0
 
     @property
     def cost_label(self) -> str:
         if self.free_tier and self.cost_usd <= 0.0:
             return "Free (local)"
+        high = max(self.cost_usd, self.cost_usd_high)
+        low_s, high_s = f"${self.cost_usd:,.2f}", f"${high:,.2f}"
+        cost = low_s if low_s == high_s else f"{low_s}–{high_s}"
         if self.free_tier:
-            return f"Free tier (else ≈ ${self.cost_usd:,.2f})"
-        if self.cost_usd < 0.01:
+            return f"Free tier (else ≈ {cost})"
+        if high < 0.01:
             return "< $0.01"
-        return f"≈ ${self.cost_usd:,.2f}"
+        return f"≈ {cost}"
 
     @property
     def time_label(self) -> str:
@@ -88,6 +109,7 @@ def estimate_batch(
     report_texts: Sequence[str],
     n_components: int,
     pricing: ModelPricing | None = None,
+    effort: str = config.DEFAULT_EFFORT,
 ) -> BatchEstimate:
     pricing = pricing or PROVIDER_PRICING.get(provider_key, DEFAULT_PRICING)
     n = len(report_texts)
@@ -117,6 +139,12 @@ def estimate_batch(
         input_tokens_billed / 1_000_000 * pricing.input_per_1m
         + output_tokens / 1_000_000 * pricing.output_per_1m
     )
+    thinking_per = 0
+    if provider_key == "anthropic":
+        thinking_per = THINKING_TOKENS_PER_REPORT.get(
+            effort, THINKING_TOKENS_PER_REPORT["high"]
+        )
+    cost_high = cost + thinking_per * n / 1_000_000 * pricing.output_per_1m
 
     base_per_request = static_tokens + USER_WRAPPER_TOKENS + out_per
     avg_report = (sum(report_tokens) / n) if n else 0
@@ -131,6 +159,8 @@ def estimate_batch(
         input_tokens_billed=input_tokens_billed,
         output_tokens=output_tokens,
         cost_usd=round(cost, 4),
+        cost_usd_high=round(cost_high, 4),
+        thinking_tokens_per_report=thinking_per,
         free_tier=pricing.free_tier,
         supports_cache=pricing.supports_cache,
         seconds_low=n * pricing.seconds_per_report * 0.6,
@@ -156,6 +186,7 @@ def compare_providers(
     documents: Sequence[ParsedDocument],
     presets: dict,
     pricing_table: dict | None = None,
+    effort: str = config.DEFAULT_EFFORT,
 ) -> List[BatchEstimate]:
     """One estimate per provider preset (using its default model & pricing),
     sorted cheapest first — so the professor can pick the best-value option."""
@@ -177,7 +208,29 @@ def compare_providers(
                 report_texts=report_texts,
                 n_components=n_components,
                 pricing=pricing_table.get(key, DEFAULT_PRICING),
+                effort=effort,
             )
         )
     estimates.sort(key=lambda e: (not e.free_tier, e.cost_usd))
     return estimates
+
+
+def actual_cost_usd(
+    provider_key: str, model: str | None, usage: Mapping[str, int]
+) -> float | None:
+    """USD for the tokens a run actually used, priced from the same table as
+    the estimate — or None when the table can't price this model (it holds one
+    price per provider, for that provider's default model)."""
+    preset = PROVIDER_PRESETS.get(provider_key)
+    pricing = PROVIDER_PRICING.get(provider_key)
+    if preset is None or pricing is None or not preset.default_model:
+        return None
+    if (model or preset.default_model) != preset.default_model:
+        return None
+    per_in = pricing.input_per_1m / 1_000_000
+    return (
+        usage.get("input_tokens", 0) * per_in
+        + usage.get("cache_creation_input_tokens", 0) * per_in * pricing.cache_write_mult
+        + usage.get("cache_read_input_tokens", 0) * per_in * pricing.cache_read_mult
+        + usage.get("output_tokens", 0) * pricing.output_per_1m / 1_000_000
+    )

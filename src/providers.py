@@ -20,6 +20,7 @@ import ast
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -175,6 +176,7 @@ class AnthropicProvider:
         self.llm = GradingLLM(
             api_key=api_key or None, model=model, effort=effort, max_retries=max_retries
         )
+        self.usage = self.llm.usage  # the client's live token counters
 
     def structure_rubric(self, rubric_text: str) -> StructuredRubric:
         return self.llm.structure_rubric(rubric_text)
@@ -219,6 +221,16 @@ class OpenAICompatibleProvider:
             base_url=base_url or None,
             max_retries=max_retries,
         )
+        # Tokens billed so far, same keys as GradingLLM.usage.
+        self.usage: Counter = Counter()
+
+    def _record_usage(self, resp) -> None:
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            self.usage.update(
+                input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            )
 
     def _sampling_kwargs(self, max_tokens: int) -> dict:
         if self.max_output_tokens:
@@ -237,6 +249,7 @@ class OpenAICompatibleProvider:
             ],
             **self._sampling_kwargs(max_tokens),
         )
+        self._record_usage(resp)
         choice = resp.choices[0]
         text = (choice.message.content or "").strip()
         if not text:
@@ -265,6 +278,7 @@ class OpenAICompatibleProvider:
             )
         except (BadRequestError, UnprocessableEntityError):
             resp = self.client.chat.completions.create(**base_kwargs)
+        self._record_usage(resp)
         return _extract_json(resp.choices[0].message.content)
 
     def structure_rubric(self, rubric_text: str) -> StructuredRubric:

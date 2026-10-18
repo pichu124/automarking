@@ -14,6 +14,8 @@ that large prefix from cache (~0.1x cost) instead of re-sending it.
 """
 from __future__ import annotations
 
+from collections import Counter
+
 import anthropic
 
 from . import config
@@ -53,6 +55,17 @@ class GradingLLM:
         self.client = anthropic.Anthropic(**kwargs)
         self.model = model or config.DEFAULT_MODEL
         self.effort = effort or config.DEFAULT_EFFORT
+        # Tokens billed by this client so far (thinking counts as output).
+        self.usage: Counter = Counter()
+
+    def _record_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.usage.update({
+                key: getattr(usage, key, 0) or 0
+                for key in ("input_tokens", "output_tokens",
+                            "cache_creation_input_tokens", "cache_read_input_tokens")
+            })
 
     # --- Pass 0: structure the rubric -------------------------------------
 
@@ -75,6 +88,7 @@ class GradingLLM:
             ],
             output_format=StructuredRubric,
         )
+        self._record_usage(response)
         rubric = response.parsed_output
         if rubric is None:
             raise ModelOutputError("Rubric structuring returned no parseable output.")
@@ -91,6 +105,7 @@ class GradingLLM:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        self._record_usage(response)
         text = "".join(b.text for b in response.content if b.type == "text").strip()
         if not text:
             # Thinking can consume the whole budget (stop_reason "max_tokens").
@@ -130,6 +145,7 @@ class GradingLLM:
             ],
             output_format=GradingResult,
         )
+        self._record_usage(response)
         result = response.parsed_output
         if result is None:
             raise ModelOutputError(f"Grading returned no parseable output for {source_name}.")
