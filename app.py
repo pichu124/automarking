@@ -95,24 +95,35 @@ def _uploads_text(uploads) -> str:
 
 
 def _parse_batch(uploads) -> list[ParsedDocument]:
-    """Parse the student uploads. A file name produced by several uploads
-    (s1111111.zip and s2222222.zip both holding report.docx) is prefixed with
-    its upload's name: grouping keys on the name, so duplicates would merge
-    two students. When that upload is named by a student ID, ALL its files get
-    the prefix, keeping each workbook with its own report; an ID-less zip
-    (late.zip) keeps the rest as-is, since a shared folder of a few files
-    would group several students as one submission."""
-    parsed = [(up.name, d) for up in uploads for d in parse_upload(up)]
-    counts = Counter(d.name for _, d in parsed)
-    whole = {
-        up_name for up_name, d in parsed
-        if counts[d.name] > 1 and _STUDENT_ID_RE.search(up_name)
-    }
-    return [
-        ParsedDocument(f"{up_name}/{d.name}", d.text)
-        if counts[d.name] > 1 or up_name in whole else d
-        for up_name, d in parsed
-    ]
+    """Parse the student uploads, keeping file names unique per student.
+
+    Grouping and the grouping editor key on the file name, so two DIFFERENT
+    files with one name (s1111111.zip and s2222222.zip both holding
+    report.docx) would merge two students. Same name AND same text is one file
+    uploaded twice and is left as-is. For a real clash:
+    - an upload named by exactly one student ID puts all its files under that
+      name as a folder, so they group by the ID (workbook stays with report);
+    - anything else gets the upload's name tagged onto the FILE name, never a
+      new folder: a folder of a few files groups as one student, and moving
+      files between folders changes which folders count as small.
+    """
+    parsed = [(i, up.name, d) for i, up in enumerate(uploads) for d in parse_upload(up)]
+    texts: dict[str, set] = {}
+    for _, _, d in parsed:
+        texts.setdefault(d.name, set()).add(d.text)
+    clashing = {i for i, _, d in parsed if len(texts[d.name]) > 1}
+    upload_names = Counter(up.name for up in uploads)
+    docs = []
+    for i, up_name, d in parsed:
+        if i in clashing and len(set(_STUDENT_ID_RE.findall(up_name))) == 1:
+            d = ParsedDocument(f"{up_name}/{d.name}", d.text)
+        elif len(texts[d.name]) > 1:
+            # The tag must not add an ID or repeat for two uploads.
+            plain = upload_names[up_name] == 1 and not _STUDENT_ID_RE.search(up_name)
+            stem, ext = os.path.splitext(d.name)
+            d = ParsedDocument(f"{stem} [{up_name if plain else f'upload {i + 1}'}]{ext}", d.text)
+        docs.append(d)
+    return docs
 
 
 def _calibration_config():

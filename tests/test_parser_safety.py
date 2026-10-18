@@ -150,6 +150,62 @@ def test_clash_never_folders_an_id_less_zip_into_one_submission():
     assert not any("alice" in s.text and "bob" in s.text for s in subs)
 
 
+def _work(student: str) -> str:
+    return f"{student} wrote this " * 40
+
+
+_BATCHES = {
+    "same zip uploaded twice": (
+        [("batch.zip", {"alice.txt": "alice", "bob.txt": "bob"})] * 2, 2),
+    "duplicate download batch (1).zip": (
+        [("batch.zip", {"alice.txt": "alice", "bob.txt": "bob", "carol.txt": "carol"}),
+         ("batch (1).zip", {"alice.txt": "alice", "bob.txt": "bob", "carol.txt": "carol"})], 3),
+    "overlapping Canvas downloads": (
+        [("d1.zip", {"smithjohn_12340_67890_report.txt": "smith",
+                     "leeann_12341_67891_report.txt": "lee",
+                     "kimbo_12342_67892_report.txt": "kim"}),
+         ("d2.zip", {"smithjohn_12340_67890_report.txt": "smith",
+                     "leeann_12341_67891_report.txt": "lee",
+                     "kimbo_12342_67892_report.txt": "kim",
+                     "patelraj_12343_67893_report.txt": "patel"})], 4),
+    "late resubmission into a class folder": (
+        [("class.zip", {f"Submissions/{n}.txt": n for n in ("alice", "bob", "carol", "dave", "erin")}),
+         ("late.zip", {"Submissions/alice.txt": "alicelate"})], 6),
+    "upload named by two IDs": (
+        [("s1111111-s2222222.zip", {"s1111111_report.txt": "first",
+                                    "s2222222_report.txt": "second",
+                                    "readme.txt": "readmeone"}),
+         ("readme.txt", "readmetwo")], 4),
+    "id-less zip plus loose clash": (
+        [("late.zip", {"alice.txt": "alice", "bob.txt": "bob", "report.txt": "carol"}),
+         ("report.txt", "dave")], 4),
+    "id-less per-student zips": (
+        [("alice.zip", {"report.txt": "alice"}), ("bob.zip", {"report.txt": "bob"})], 2),
+    "id-named per-student zips": (
+        [("s1111111.zip", {"report.txt": "first", "workbook.txt": "first"}),
+         ("s2222222.zip", {"report.txt": "second", "calc.txt": "second"})], 2),
+}
+
+
+@pytest.mark.parametrize("uploads, expected", _BATCHES.values(), ids=list(_BATCHES))
+def test_batch_never_merges_two_students(uploads, expected):
+    import app
+
+    batch = [
+        _Upload(name, _zip({k: _work(v) for k, v in body.items()})
+                if isinstance(body, dict) else _work(body).encode())
+        for name, body in uploads
+    ]
+    students = {
+        v for _, body in uploads
+        for v in (body.values() if isinstance(body, dict) else [body])
+    }
+    subs = _submissions(app._parse_batch(batch))
+    owners = [{w for w in students if f"{w} wrote" in s.text} for s in subs]
+    assert all(len(o) == 1 for o in owners), owners
+    assert len(subs) == expected, owners
+
+
 def test_batch_names_without_collision_are_left_alone():
     import app
 
