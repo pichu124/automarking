@@ -18,7 +18,9 @@ So fallback works as follows:
   * Only a persistent provider-health failure (rate-limit after retries, auth
     error, server error, connection error) triggers a switch — and switching
     means **re-grading the whole cohort from scratch** with the next provider.
-    Partial results from the failed provider are discarded.
+    Partial results from the failed provider never join the next provider's
+    cohort; if the LAST provider fails they are returned uncalibrated (with
+    ``pending`` set), and with a ``cache`` a later run resumes them.
   * Per-report content errors (e.g. an unparseable document, invalid JSON for
     one report) do NOT switch provider; they are recorded and skipped.
 
@@ -27,10 +29,11 @@ provider. The result records which one, and whether a fallback happened.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Protocol, Sequence
+from typing import Callable, List, MutableMapping, Optional, Protocol, Sequence
 
 from .calibration import CalibrationConfig, CalibrationReport, calibrate_scores, rescale_components
 from .document_parser import ParsedDocument
@@ -112,6 +115,9 @@ class BatchResult:
     # Pass-1 output kept so the cohort can be re-calibrated (new mean/caps/
     # boundary settings) WITHOUT re-calling the LLM — i.e. for free.
     raw_grades: List[tuple] = field(default_factory=list)  # (source_name, GradingResult)
+    # Reports still ungraded when the last provider gave out. Non-zero means
+    # raw_grades is a partial, UNCALIBRATED cohort — resume, don't publish.
+    pending: int = 0
 
 
 # --- Provider-health classification ---------------------------------------
@@ -139,10 +145,11 @@ _HEALTH_MESSAGE_TOKENS = (
 class ProviderUnavailable(Exception):
     """Raised when a provider can't reliably serve the batch (-> fall back)."""
 
-    def __init__(self, label: str, reason: str):
+    def __init__(self, label: str, reason: str, graded: Sequence[tuple] = ()):
         super().__init__(f"{label} unavailable: {reason}")
         self.label = label
         self.reason = reason
+        self.graded = list(graded)  # (source_name, GradingResult) done before it failed
 
 
 def _is_provider_unhealthy(exc: Exception) -> bool:
@@ -216,6 +223,50 @@ def _context_overflow_keep_chars(exc: Exception, current_chars: int) -> int | No
     return max(2000, min(keep, current_chars - 1))
 
 
+# --- Resume cache keys -----------------------------------------------------
+
+def _sha1(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _run_key(session: GradingSession, spec: ProviderSpec) -> str:
+    """Fingerprint of everything that shapes a grade apart from the report.
+
+    A saved grade is reused only while all of it is unchanged — task, rubric,
+    components, anchors, answer key, provider settings and length caps — so a
+    resumed cohort stays on one scale. The API key and session name are left
+    out: neither changes a grade.
+    """
+    return _sha1(repr((
+        session.task_text, session.rubric_text, session.components,
+        sorted(session.reference_samples.items()), session.marker_materials,
+        spec.provider_key, spec.model, spec.base_url, spec.effort, spec.temperature,
+        config.MAX_REPORT_CHARS, config.MAX_SAMPLE_CHARS,
+    )))
+
+
+def _doc_key(run_key: str, doc: ParsedDocument) -> str:
+    return run_key + _sha1(f"{doc.name}\0{doc.text}")
+
+
+def count_graded(
+    specs: Sequence[ProviderSpec],
+    session: GradingSession,
+    documents: Sequence[ParsedDocument],
+    cache: MutableMapping,
+) -> tuple[int, str]:
+    """(documents with a saved grade, provider that graded them) for the first
+    provider in the chain holding any for this exact batch and session."""
+    # ponytail: a resume still tries the chain in order, so a healthy earlier
+    # provider with no saved grades re-grades everything (one scale per cohort).
+    for spec in specs:
+        run_key = _run_key(session, spec)
+        done = sum(_doc_key(run_key, d) in cache for d in documents)
+        if done:
+            return done, spec.display
+    return 0, ""
+
+
 # --- Pass 1 / Pass 2 helpers ----------------------------------------------
 
 def _grade_pass1(
@@ -224,22 +275,31 @@ def _grade_pass1(
     documents: Sequence[ParsedDocument],
     progress_callback: ProgressCallback | None,
     raise_on_unhealthy: bool,
+    cache: MutableMapping | None = None,
+    run_key: str = "",
 ) -> tuple[List[tuple[str, GradingResult]], List[str], List[str]]:
     """Grade every document with one grader.
 
     Raises ``ProviderUnavailable`` (when ``raise_on_unhealthy``) on the first
-    provider-health failure, so the caller can discard partial work and switch.
-    Returns ``(pairs, errors, notes)`` where pairs are ``(source_name,
-    GradingResult)`` — the raw text is dropped so the result can be
-    re-calibrated later without holding the whole batch — and notes record
-    non-fatal interventions (e.g. an oversized submission auto-trimmed to fit
-    the model's context window).
+    provider-health failure, carrying the pairs graded so far, so the caller
+    can switch provider. Returns ``(pairs, errors, notes)`` where pairs are
+    ``(source_name, GradingResult)`` — the raw text is dropped so the result
+    can be re-calibrated later without holding the whole batch — and notes
+    record non-fatal interventions (e.g. an oversized submission auto-trimmed
+    to fit the model's context window). With a ``cache``, documents already in
+    it under ``run_key`` are reused instead of graded, and each new pair is
+    saved the moment it lands.
     """
     raw_results: List[tuple[str, GradingResult]] = []
     errors: List[str] = []
     notes: List[str] = []
     total = len(documents)
     for idx, doc in enumerate(documents):
+        if cache is not None:
+            key = _doc_key(run_key, doc)
+            if key in cache:
+                raw_results.append(cache[key])
+                continue
         if progress_callback:
             progress_callback(idx, total, f"Grading {doc.name}")
         report_text = doc.text
@@ -288,9 +348,13 @@ def _grade_pass1(
                     "model returned no component grades for this report"
                 )
             raw_results.append((doc.name, graded))
+            if cache is not None:
+                # Saved before the next progress update: in Streamlit that is
+                # where a click mid-run raises RerunException.
+                cache[key] = (doc.name, graded)
         except Exception as exc:
             if raise_on_unhealthy and _is_provider_unhealthy(exc):
-                raise ProviderUnavailable(_label_for(grader), str(exc)) from exc
+                raise ProviderUnavailable(_label_for(grader), str(exc), raw_results) from exc
             errors.append(f"{doc.name}: {exc}")
     if progress_callback:
         progress_callback(total, total, "Calibrating cohort")
@@ -441,11 +505,17 @@ def grade_batch_with_fallback(
     calibration_config: CalibrationConfig | None = None,
     progress_callback: ProgressCallback | None = None,
     builder: GraderBuilder = _default_builder,
+    cache: MutableMapping | None = None,
 ) -> BatchResult:
     """Grade the cohort, trying each provider in order until one serves it whole.
 
     Switching providers re-grades the ENTIRE cohort with the new provider, so
     the final result is always internally consistent (one grader, one scale).
+    If every provider fails, the first one's partial grades are returned
+    uncalibrated with ``pending`` set. ``cache`` (e.g. Streamlit session
+    state) gets every grade as it lands and supplies grades the same
+    provider already made for the same inputs, so a cut-short run resumes
+    without paying for finished reports again.
     """
     result = BatchResult()
     attempted: List[str] = []
@@ -467,16 +537,21 @@ def grade_batch_with_fallback(
 
         try:
             raw_results, per_errors, pass_notes = _grade_pass1(
-                grader, session, documents, cb, raise_on_unhealthy=True
+                grader, session, documents, cb, raise_on_unhealthy=True,
+                cache=cache, run_key=_run_key(session, spec),
             )
         except ProviderUnavailable as exc:
-            # Discard partial work — the next provider re-grades from scratch.
+            # The next provider re-grades from scratch; this partial work is
+            # only kept in case no provider finishes the cohort.
             attempted.append(label)
             result.notes.append(
                 f"{label} unavailable ({exc.reason}); "
                 + ("re-grading the whole cohort with the next provider to keep "
                    "scores consistent." if has_next else "no fallback provider left.")
             )
+            if exc.graded and not result.raw_grades:
+                result.raw_grades = exc.graded
+                result.provider_label = label
             continue
 
         if not raw_results:
@@ -500,6 +575,14 @@ def grade_batch_with_fallback(
     result.errors.append(
         "All configured providers failed: " + ", ".join(attempted or ["(none usable)"])
     )
+    if result.raw_grades:
+        result.pending = len(documents) - len(result.raw_grades)
+        result.notes.append(
+            f"{result.provider_label} graded {len(result.raw_grades)} of "
+            f"{len(documents)} reports before it became unavailable; those grades "
+            f"are kept, uncalibrated, so resuming grades only the other "
+            f"{result.pending}."
+        )
     return result
 
 
