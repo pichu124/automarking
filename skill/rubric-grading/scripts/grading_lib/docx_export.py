@@ -133,6 +133,13 @@ def _add_cohort_summary(doc: Document, calib: CalibrationReport, graded_by: str 
         run.font.color.rgb = RGBColor.from_string("B00020")
         doc.add_paragraph()
 
+    ties = getattr(calib, "cap_ties", None)
+    if ties:
+        listed = ", ".join(f"{who} (raw {raw:g}, {band})" for who, raw, band in ties)
+        doc.add_paragraph(
+            sanitize_text(f"Tied at the HD/DI cap boundary - held at the lower band: {listed}")
+        )
+
 
 # Column widths for the student table (A4 portrait, ~16cm usable). Narrow
 # Component/Score/Max so Professor's Notes gets most of the page.

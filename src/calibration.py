@@ -17,6 +17,8 @@ Algorithm — "banded rank mapping with mean targeting":
        - top  floor(0.10*N) ranks  -> ceiling 95   (may be HD)
        - next floor(0.20*N) ranks  -> ceiling 79    (DI at most, never HD)
        - all remaining ranks       -> ceiling 69    (never DI/HD)
+     Equal raw totals share one ceiling (that of the group's lowest rank), so
+     a tie straddling a cap boundary goes to the lower band as a whole.
      Every rank shares a soft floor of 50 (minimise fails).
   3. Apply a single global additive shift `t` to every raw score, then clamp
      into each rank's [floor, ceiling]. Because raw scores and the bounds are
@@ -33,12 +35,15 @@ binary search guarantees the mean; the soft floor minimises fails.
 """
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Sequence
 
 from .config import CalibrationConfig, DEFAULT_CALIBRATION
+
+_BAND_NAMES = ("Fail", "Pass", "Credit", "Distinction", "High Distinction")
 
 
 @dataclass
@@ -57,6 +62,11 @@ class CalibrationReport:
     raw_std: float = 0.0          # spread of the model's raw scores
     distinct_finals: int = 0      # how many distinct calibrated totals
     di_cap_widened: bool = False  # no-HD rule applied (DI cap raised)
+    # Students held at the lower band because their raw total tied with
+    # students across an HD/DI cap boundary: (who, raw total, band held at).
+    # The engine fills ``who`` with the index into ``raw_totals``; callers
+    # swap in a name before display (the .docx prints ``who`` as given).
+    cap_ties: List[tuple] = field(default_factory=list)
 
     @property
     def low_discrimination(self) -> bool:
@@ -124,14 +134,24 @@ def _calibrate_once(
     n_hd = math.floor(cfg.hd_cap_fraction * n + 1e-9)
     n_di = math.floor(cfg.di_cap_fraction * n + 1e-9)
 
-    ceil_by_rank: List[float] = []
-    for pos in range(n):
+    def ceiling_at(pos: int) -> float:
         if pos < n_hd:
-            ceil_by_rank.append(cfg.score_ceiling)
-        elif pos < n_hd + n_di:
-            ceil_by_rank.append(cfg.di_ceiling)
-        else:
-            ceil_by_rank.append(cfg.base_ceiling)
+            return cfg.score_ceiling
+        if pos < n_hd + n_di:
+            return cfg.di_ceiling
+        return cfg.base_ceiling
+
+    # Equal raw totals must never be split across a cap by input order: every
+    # rank takes the ceiling of the LAST rank of its tie group, so a group that
+    # straddles a cap boundary goes to the lower band as a whole (the cap is a
+    # hard maximum). round(): sums of decimal marks can differ in the last bit.
+    tie_groups = [
+        list(g) for _, g in itertools.groupby(range(n), key=lambda p: round(sorted_raw[p], 6))
+    ]
+    group_at = {p: g for g in tie_groups for p in g}
+    ceil_by_rank = [ceiling_at(group_at[p][-1]) for p in range(n)]
+    # First rank of each held group -> the ceiling it would otherwise have had.
+    held = {g[0]: ceiling_at(g[0]) for g in tie_groups if ceiling_at(g[0]) > ceiling_at(g[-1])}
 
     floor = cfg.score_floor
 
@@ -220,14 +240,18 @@ def _calibrate_once(
     # keeps the ceiling sequence non-increasing, which is what guarantees the
     # clamp can never invert the ranking (demoting a single mid-sequence rank
     # could put a higher-raw student below a lower-raw one). Each pass moves
-    # the demotion frontier strictly upward, so this terminates.
+    # the demotion frontier strictly upward, so this terminates. The frontier
+    # is the first rank of the last DI member's tie group: ties go down together.
     for _ in range(n + 1):
         di_positions = [
             p for p in range(n) if cfg.di_lower <= scores_sorted[p] < cfg.di_upper
         ]
         if len(di_positions) <= n_di:
             break
-        frontier = max(di_positions)  # last rank currently inside the DI band
+        group = group_at[max(di_positions)]
+        frontier = group[0]
+        if len(di_positions) - len(group) < n_di:  # part of the group would fit
+            held.setdefault(frontier, ceil_by_rank[frontier])
         for p in range(frontier, n):
             ceil_by_rank[p] = min(ceil_by_rank[p], cfg.base_ceiling)
         t = solve_shift()
@@ -236,6 +260,20 @@ def _calibrate_once(
     final = [0.0] * n
     for p, i in enumerate(order):
         final[i] = scores_sorted[p]
+
+    def band(s: float) -> int:
+        cuts = (cfg.fail_threshold, cfg.credit_threshold, cfg.di_lower, cfg.hd_threshold)
+        return sum(s >= c for c in cuts)
+
+    # Report a held group only when the hold cost it a band (at the final shift).
+    cap_ties = []
+    for start, alt_ceiling in sorted(held.items()):
+        alt = round(avoid_boundaries(_clamp(sorted_raw[start] + t, floor, alt_ceiling)), 1)
+        if band(alt) > band(scores_sorted[start]):
+            cap_ties += [
+                (order[p], float(raw_totals[order[p]]), _BAND_NAMES[band(scores_sorted[p])])
+                for p in group_at[start]
+            ]
 
     hd_count = sum(1 for s in final if s >= cfg.hd_threshold)
     di_count = sum(1 for s in final if cfg.di_lower <= s < cfg.di_upper)
@@ -253,6 +291,7 @@ def _calibrate_once(
         shift=round(t, 2),
         raw_std=round(statistics.pstdev(raw_totals), 2) if n > 1 else 0.0,
         distinct_finals=len(set(final)),
+        cap_ties=cap_ties,
     )
     return final, report
 

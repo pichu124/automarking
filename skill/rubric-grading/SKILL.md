@@ -125,7 +125,8 @@ python scripts/export_docx.py --results WORK/results --finals WORK/finals.json \
 Send the .docx to the professor. In your message: the band distribution, the
 table of raw -> final per student, and a short list of things they must
 decide or check - papers lifted to the floor (recommend whether they deserve
-it), quota cliffs, zeros on a criterion, missing required files, late
+it), quota cliffs, students held at the lower band because they tied across
+a cap (summary `cap_ties`), zeros on a criterion, missing required files, late
 evidence, unnamed students. Never commit grade files to a git repository.
 
 ## Appeals and reconsideration requests

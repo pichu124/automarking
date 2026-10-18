@@ -1,0 +1,135 @@
+"""Policy rules: ties at a cap boundary, pinned marks outside calibration,
+rubrics not out of 100, and bare student IDs only after a label."""
+from __future__ import annotations
+
+import dataclasses
+import io
+import itertools
+import json
+import math
+import random
+import unicodedata
+
+import pytest
+from docx import Document
+
+from src.calibration import CalibrationReport, calibrate_scores
+from src.config import DEFAULT_CALIBRATION as CFG
+from src.docx_export import build_grade_document
+from tests.test_skill_scripts import COHORT, calibrate, run, write_results
+
+BANDS = ((80, "High Distinction"), (70, "Distinction"), (60, "Credit"), (50, "Pass"), (-1, "Fail"))
+
+
+def band(score):
+    return next(name for cut, name in BANDS if score >= cut)
+
+
+def subdir(tmp_path, name):
+    d = tmp_path / name
+    d.mkdir()
+    return d
+
+
+# --- A: equal raw totals never split across a cap ----------------------------
+
+@pytest.mark.parametrize("raw,tied", [
+    ([85.0, 85.0] + [60.0] * 8, [0, 1]),
+    ([60.0] * 8 + [85.0, 85.0], [8, 9]),
+])
+def test_tie_straddling_hd_cap_is_held_at_distinction(raw, tied):
+    final, rep = calibrate_scores(raw)
+
+    assert final[tied[0]] == final[tied[1]] == 78.5
+    assert rep.hd_count == 0
+    assert rep.cap_ties == [(i, 85.0, "Distinction") for i in tied]
+
+
+def test_tie_straddling_di_cap_is_held_at_credit():
+    raw = [90.0, 80.0, 80.0, 80.0] + [60.0] * 6  # N=10: 1 HD place, 2 DI places
+
+    final, rep = calibrate_scores(raw)
+
+    assert final[1] == final[2] == final[3] == 68.5
+    assert final[0] >= 80 and rep.di_count == 0
+    assert rep.cap_ties == [(1, 80.0, "Credit"), (2, 80.0, "Credit"), (3, 80.0, "Credit")]
+
+
+def test_no_cap_ties_when_the_hold_changes_nobody_band():
+    _, rep = calibrate_scores([90.0, 80.0, 75.0] + [60.0] * 7)
+    assert rep.cap_ties == []
+
+
+def test_tied_cohorts_are_order_independent_and_keep_the_invariants():
+    random.seed(11)
+    cohorts = [[float(round(random.gauss(mu, 10))) for _ in range(n)]
+               for n in (7, 10, 13, 20, 31) for mu in (60, 72, 85)]
+    configs = itertools.product((55.0, 65.5, 75.0), (0, 10, 30), (0, 20, 40), (True, False))
+    for mean, hd, di, avoid in configs:
+        cfg = dataclasses.replace(
+            CFG, target_mean_low=mean - 0.5, target_mean_high=mean + 0.5,
+            hd_cap_fraction=hd / 100, di_cap_fraction=di / 100, avoid_band_boundaries=avoid,
+        )
+        for raw in cohorts:
+            raw = [min(100.0, max(0.0, r)) for r in raw]
+            n = len(raw)
+            final, rep = calibrate_scores(raw, cfg)
+            by_raw = {}
+            for r, f in zip(raw, final):
+                assert by_raw.setdefault(r, f) == f, (cfg, raw, final)
+            shuffled = raw[::-1]
+            assert [by_raw[r] for r in shuffled] == calibrate_scores(shuffled, cfg)[0]
+            order = sorted(range(n), key=lambda i: raw[i], reverse=True)
+            assert all(final[a] >= final[b] for a, b in zip(order, order[1:]))
+            assert all(0 <= f <= 100 for f in final)
+            assert sum(f >= 80 for f in final) <= math.floor(hd / 100 * n + 1e-9)
+            assert sum(70 <= f < 80 for f in final) <= rep.di_cap
+            for i, r, held in rep.cap_ties:
+                assert raw[i] == r and band(final[i]) == held
+
+
+def _summary_text(calib):
+    blob = build_grade_document([], "Tie check", calib)
+    doc = Document(io.BytesIO(blob))
+    return "\n".join(p.text for p in doc.paragraphs)
+
+
+def test_docx_summary_lists_cap_ties():
+    calib = CalibrationReport(n=10, raw_mean=65, final_mean=65.5, hd_count=0, di_count=2,
+                              fail_count=0, hd_cap=1, di_cap=3, shift=2.2,
+                              cap_ties=[("Lê Văn A (s4100001)", 85.0, "Distinction"),
+                                        ("s4100002", 85.0, "Distinction")])
+
+    text = _summary_text(calib)
+
+    assert ("Tied at the HD/DI cap boundary - held at the lower band: "
+            "Le Van A (s4100001) (raw 85, Distinction), s4100002 (raw 85, Distinction)") in text
+    calib.cap_ties = []
+    assert "Tied at" not in _summary_text(calib)
+
+
+TIED = {"s4200000": 85.0, "s4200001": 85.0, **{f"s42001{i:02d}": 60.0 + i for i in range(8)}}
+
+
+def test_calibrate_script_reports_cap_ties(tmp_path):
+    code, stdout, err, out = calibrate(tmp_path, totals=TIED)
+
+    assert code == 0, err
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["finals"]["s4200000"] == data["finals"]["s4200001"] < 80
+    assert data["summary"]["cap_ties"] == [["s4200000", 85.0, "Distinction"],
+                                           ["s4200001", 85.0, "Distinction"]]
+    assert "held at the lower band" in stdout and "s4200001" in stdout
+
+
+def test_export_lists_cap_ties_by_name(tmp_path):
+    assert calibrate(tmp_path, totals=TIED)[0] == 0
+    out = tmp_path / "grades.docx"
+
+    code, _, err = run("export_docx.py", "--results", tmp_path / "results",
+                       "--finals", tmp_path / "finals.json", "--title", "T", "--out", out)
+
+    assert code == 0, err
+    text = "\n".join(p.text for p in Document(out).paragraphs)
+    assert ("held at the lower band: Le Thi Ngoc (s4200000) (raw 85, Distinction), "
+            "Le Thi Ngoc (s4200001) (raw 85, Distinction)") in text

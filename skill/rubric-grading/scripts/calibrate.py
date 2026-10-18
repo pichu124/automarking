@@ -21,6 +21,9 @@ optional avoidance of 59/69/79 (scores in [T-guard, T) pushed to T-guard).
 If the cohort ends up with no HD, the DI cap widens to --di-no-hd.
 --no-floor: these students keep raw + the cohort shift (within 0-100) instead of the floor.
 --fixed:    pin exact finals (they still count toward the cohort mean).
+Students with equal raw totals are never split across the HD/DI cap: a tie
+straddling a cap goes to the lower band as a whole and is listed in
+summary["cap_ties"] as [sid, raw %, band held at].
 """
 from __future__ import annotations
 
@@ -97,12 +100,14 @@ def main() -> None:
         )
     n = len(raw)
     guard = max(a.guard, 1.5)
+    cap_ties = []
 
     if a.preserve_bands:
         prev_run = json.load(open(a.preserve_bands, encoding="utf-8"))
         prev = prev_run.get("finals", prev_run)
         # The bands were set under the previous run's caps.
         diag = {k: v for k, v in prev_run.get("summary", {}).items() if k in ("hd_cap", "di_cap")}
+        cap_ties = [t for t in prev_run.get("summary", {}).get("cap_ties", []) if t[0] not in fixed]
         ids = [s for s in raw if s not in fixed]
         missing = [s for s in ids if s not in prev]
         if missing:
@@ -142,6 +147,7 @@ def main() -> None:
         for s in no_floor:
             finals[s] = round(min(100.0, max(0.0, raw[s] + shift)), 1)
         finals.update(fixed)
+        cap_ties = [(ids[i], r, held) for i, r, held in rep.cap_ties]
         mode, widened = "standard", rep.di_cap_widened
         diag = {"hd_cap": rep.hd_cap, "di_cap": rep.di_cap, "raw_std": rep.raw_std,
                 "low_discrimination": rep.low_discrimination}
@@ -158,10 +164,15 @@ def main() -> None:
         "fail": sum(v < 50 for v in vals), "di_cap_widened": widened, **diag,
         "rank_inversions": inversions, "boundary_scores": boundary,
     }
+    if cap_ties:
+        summary["cap_ties"] = cap_ties
     json.dump({"finals": finals, "summary": summary}, open(a.out, "w", encoding="utf-8"), indent=1)
     print(json.dumps(summary, indent=1))
     for s in sorted(finals, key=lambda s: -finals[s]):
         print(f"{s:10s} raw {raw[s]:5.1f} -> {finals[s]:5.1f}")
+    if cap_ties:
+        print("Tied at the HD/DI cap boundary - held at the lower band: "
+              + ", ".join(f"{s} (raw {r:g}, {held})" for s, r, held in cap_ties))
 
 
 if __name__ == "__main__":

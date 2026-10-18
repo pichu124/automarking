@@ -49,7 +49,7 @@ def main() -> None:
     fj = json.load(open(a.finals, encoding="utf-8"))
     finals, summ = fj["finals"], fj.get("summary", {})
 
-    reports, comments = [], {}
+    reports, comments, idents = [], {}, {}
     for p in sorted(glob.glob(os.path.join(a.results, "*.json"))):
         r = json.load(open(p, encoding="utf-8"))
         sid, f = r["sid"], float(finals[r["sid"]])
@@ -66,6 +66,7 @@ def main() -> None:
             raw_total=float(r["total"]), final_total=f,
         ))
         comments[sanitize_text(ident)] = r.get("overall_comment", "")
+        idents[sid] = ident
 
     vals = [r.final_total for r in reports]
     raws = [r.raw_total for r in reports]
@@ -75,6 +76,7 @@ def main() -> None:
         fail_count=sum(v < 50 for v in vals), hd_cap=summ.get("hd_cap", "n/a"), di_cap=summ.get("di_cap", "n/a"),
         shift=summ.get("shift", 0.0), raw_std=round(statistics.pstdev(raws), 2) if len(raws) > 1 else 0.0,
         distinct_finals=len(set(vals)), di_cap_widened=bool(summ.get("di_cap_widened")),
+        cap_ties=[(idents.get(sid, sid), raw, held) for sid, raw, held in summ.get("cap_ties", [])],
     )
     reports.sort(key=lambda x: -x.final_total)
     blob = build_grade_document(reports, a.title, calib, graded_by=a.graded_by)

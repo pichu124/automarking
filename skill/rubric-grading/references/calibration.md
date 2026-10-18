@@ -4,7 +4,9 @@
 1. Ranks students by raw total; the ranking is never changed.
 2. Gives ranks score ceilings so the caps hold by construction: the top
    floor(HD% x N) may reach 95, the next floor(DI% x N) may reach 79, everyone
-   else is capped at 69. Everyone has a soft floor of 50.
+   else is capped at 69. Everyone has a soft floor of 50. Equal raw totals
+   share a ceiling: a tie straddling a cap goes to the lower band together
+   (the cap is a hard maximum; input order never decides).
 3. Adds one global shift to every raw score and binary-searches it so the
    cohort mean hits the target band (target +/- 0.5).
 4. With boundary avoidance on, a score in [T - buffer, T) for T in 60/70/80
@@ -36,6 +38,9 @@
 - **Quota cliff**: with a 20% DI cap, the last student inside the quota and
   the first outside may be 1 raw mark apart but ~10 final marks apart
   (78.5 vs 68.5). Name the students at the cliff.
+- **Ties at a cap**: students whose equal raw total straddled a cap were all
+  held at the lower band; the summary lists them in `cap_ties` (the Word
+  summary too). Name them so the professor can review.
 - **Clusters**: several students on 78.5 / 68.5 / 58.5 is expected (ceilings
   plus boundary avoidance). The ranking is still preserved.
 - **Floor lifts**: list every paper lifted to 50 with its raw mark and a
