@@ -287,6 +287,9 @@ def _grade_pass1(
                 raise ModelOutputError(
                     "model returned no component grades for this report"
                 )
+            graded, note = _align_to_rubric(graded, session.components)
+            if note:
+                notes.append(f"{doc.name}: {note}")
             raw_results.append((doc.name, graded))
         except Exception as exc:
             if raise_on_unhealthy and _is_provider_unhealthy(exc):
@@ -305,6 +308,59 @@ def _finite(x: float) -> float:
     except (TypeError, ValueError):
         return 0.0
     return x if math.isfinite(x) else 0.0
+
+
+def _norm_name(name: str) -> str:
+    return " ".join(re.sub(r"\W+", " ", name.casefold()).split())
+
+
+def _align_to_rubric(
+    graded: GradingResult, rubric: Sequence[RubricComponent]
+) -> tuple[GradingResult, str]:
+    """Hold each component to the session rubric's weight, not the model's max.
+
+    The structured rubric (weights normalised to sum 100) is the source of
+    truth: a model that echoes the rubric's raw marks (20 + 10) instead of the
+    weights (66.67 + 33.33) would otherwise cap every total at 30. Components
+    are paired by name when the names match one-to-one, else by position; a
+    maximum more than 1% off its weight is replaced by the weight and the score
+    rescaled proportionally. Returns the result and an audit note ("" if none).
+    """
+    if not rubric:
+        return graded, ""
+    if len(graded.components) != len(rubric):
+        return graded, (
+            f"the model returned {len(graded.components)} components but the "
+            f"rubric has {len(rubric)}; the model's own component maxima were "
+            "kept (they could not be checked against the rubric weights)."
+        )
+    by_name = {_norm_name(c.name): c.weight for c in rubric}
+    names = [_norm_name(c.name) for c in graded.components]
+    if set(names) == set(by_name) and len(set(names)) == len(names):
+        weights = [by_name[n] for n in names]
+    else:
+        weights = [c.weight for c in rubric]
+
+    fixed: List[ComponentGrade] = []
+    changed: List[str] = []
+    for c, weight in zip(graded.components, weights):
+        model_max, weight = _finite(c.max_score), _finite(weight)
+        if abs(model_max - weight) <= 0.01 * weight:
+            fixed.append(c)
+            continue
+        score = _finite(c.score)
+        if model_max > 0:
+            score = score / model_max * weight
+        else:
+            score = max(0.0, min(weight, score))
+        fixed.append(c.model_copy(update={"score": score, "max_score": weight}))
+        changed.append(f"'{c.name}' {model_max:g} → {weight:g}")
+    if not changed:
+        return graded, ""
+    return graded.model_copy(update={"components": fixed}), (
+        "component maxima corrected to the rubric weights ("
+        + ", ".join(changed) + "); scores rescaled proportionally."
+    )
 
 
 def _sane_component_scores(graded: GradingResult) -> List[float]:
