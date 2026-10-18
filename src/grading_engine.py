@@ -254,17 +254,19 @@ def count_graded(
     session: GradingSession,
     documents: Sequence[ParsedDocument],
     cache: MutableMapping,
-) -> tuple[int, str]:
-    """(documents with a saved grade, provider that graded them) for the first
-    provider in the chain holding any for this exact batch and session."""
-    # ponytail: a resume still tries the chain in order, so a healthy earlier
-    # provider with no saved grades re-grades everything (one scale per cohort).
-    for spec in specs:
+) -> tuple[int, int]:
+    """(documents with a saved grade, index in ``specs`` of their provider) for
+    the first provider holding any for this exact batch and session.
+
+    A resume starts the chain at that index: the providers before it failed
+    the run being resumed, and a recovered one would re-grade every report.
+    """
+    for index, spec in enumerate(specs):
         run_key = _run_key(session, spec)
         done = sum(_doc_key(run_key, d) in cache for d in documents)
         if done:
-            return done, spec.display
-    return 0, ""
+            return done, index
+    return 0, 0
 
 
 # --- Pass 1 / Pass 2 helpers ----------------------------------------------
@@ -287,18 +289,21 @@ def _grade_pass1(
     can be re-calibrated later without holding the whole batch — and notes
     record non-fatal interventions (e.g. an oversized submission auto-trimmed
     to fit the model's context window). With a ``cache``, documents already in
-    it under ``run_key`` are reused instead of graded, and each new pair is
-    saved the moment it lands.
+    it under ``run_key`` are reused (with their notes) instead of graded, and
+    each new grade is saved the moment it lands.
     """
     raw_results: List[tuple[str, GradingResult]] = []
     errors: List[str] = []
     notes: List[str] = []
     total = len(documents)
     for idx, doc in enumerate(documents):
+        doc_notes_from = len(notes)
         if cache is not None:
             key = _doc_key(run_key, doc)
             if key in cache:
-                raw_results.append(cache[key])
+                name, graded, doc_notes = cache[key]
+                raw_results.append((name, graded))
+                notes.extend(doc_notes)
                 continue
         if progress_callback:
             progress_callback(idx, total, f"Grading {doc.name}")
@@ -351,7 +356,7 @@ def _grade_pass1(
             if cache is not None:
                 # Saved before the next progress update: in Streamlit that is
                 # where a click mid-run raises RerunException.
-                cache[key] = (doc.name, graded)
+                cache[key] = (doc.name, graded, notes[doc_notes_from:])
         except Exception as exc:
             if raise_on_unhealthy and _is_provider_unhealthy(exc):
                 raise ProviderUnavailable(_label_for(grader), str(exc), raw_results) from exc

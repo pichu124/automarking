@@ -334,16 +334,41 @@ def test_quota_on_the_last_provider_keeps_graded_reports_for_resume(monkeypatch,
     errors = " | ".join(e.value for e in at.error)
     assert "1 of 3 report(s) still ungraded" in errors
     assert "quota exceeded" in errors
+    assert not [b for b in at.button if "Run Two-Pass" in b.label]  # Resume shown at once
 
-    at.run()
     _resume_and_check(monkeypatch, at, done=2)
+
+
+def test_resume_continues_with_the_provider_that_holds_the_grades(monkeypatch, dummy_keys):
+    class _NoQuota:
+        def grade_report(self, **kw):
+            raise _QuotaExceeded("Error code: 429 - quota exceeded")
+
+    graders = {"anthropic": _NoQuota(), "gemini": _QuotaAtGamma()}
+    monkeypatch.setattr(
+        ge, "grade_batch_with_fallback",
+        lambda specs, *a, **k: _REAL_GRADE(
+            specs, *a, builder=lambda spec: graders[spec.provider_key], **k
+        ),
+    )
+    at = _app(task_text="Write an essay.", rubric_text="Analysis: 100",
+              components=COMPONENTS, fallback_keys=["gemini"])
+    _upload_batch(at, BATCH)
+    _click(at, "Run Two-Pass")
+    assert "already graded by Google Gemini" in " | ".join(i.value for i in at.info)
+
+    # Claude is back, but paying it for all 3 would waste Gemini's 2 grades.
+    graders.update(anthropic=_Counting(), gemini=_Counting())
+    _click(at, "Resume (2 of 3 already graded)")
+    assert graders["anthropic"].graded == []
+    assert graders["gemini"].graded == ["gamma.txt"]
+    assert at.session_state["batch_result"].provider_label.startswith("Google Gemini")
 
 
 def test_start_over_regrades_every_report(monkeypatch, dummy_keys):
     _use_grader(monkeypatch, _QuotaAtGamma())
     at = _ready_app()
     _click(at, "Run Two-Pass")
-    at.run()
 
     fresh = _Counting()
     _use_grader(monkeypatch, fresh)

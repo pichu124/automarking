@@ -986,24 +986,31 @@ def grade_ui() -> None:
         _estimate_ui(_session_from_state())
 
     docs = st.session_state["documents"]
-    done, done_by = (
-        count_graded(_provider_chain(), _session_from_state(), docs,
+    chain = _provider_chain()
+    done, start = (
+        count_graded(chain, _session_from_state(), docs,
                      st.session_state["_graded_pairs"])
-        if ready else (0, "")
+        if ready else (0, 0)
     )
+    stopped = st.session_state.pop("_grading_stopped", None)
+    if stopped:
+        st.error(stopped)
     if done:
         st.info(
             f"⏸️ The last grading run stopped early. {done} of {len(docs)} "
-            f"report(s) are already graded by {done_by} and saved. **Resume** "
-            "grades only the rest; **Start over** re-grades every report."
+            f"report(s) are already graded by {chain[start].display} and saved. "
+            f"**Resume** grades only the rest with {chain[start].display}; "
+            "**Start over** re-grades every report."
         )
         col_resume, col_restart = st.columns(2)
+        # A fixed key: the count in the label must not change the widget ID.
         run = col_resume.button(
-            f"▶️ Resume ({done} of {len(docs)} already graded)", type="primary"
+            f"▶️ Resume ({done} of {len(docs)} already graded)",
+            type="primary", key="resume_grading",
         )
         if col_restart.button("🔁 Start over"):
             st.session_state["_graded_pairs"] = {}
-            run = True
+            run, start = True, 0
     else:
         run = st.button("🚀 Run Two-Pass Grading", type="primary", disabled=not ready)
 
@@ -1023,22 +1030,24 @@ def grade_ui() -> None:
 
         try:
             result = grade_batch_with_fallback(
-                _provider_chain(), session, docs,
+                chain[start:], session, docs,
                 calibration_config=_calibration_config(), progress_callback=cb,
                 cache=st.session_state["_graded_pairs"],
             )
             if result.pending:
                 # Calibration needs the whole cohort: keep the partial grades
-                # for Resume instead of publishing them.
-                st.error(
+                # for Resume instead of publishing them, and rerun so the
+                # Resume prompt replaces the Run button right away.
+                st.session_state["_grading_stopped"] = (
                     f"Grading stopped early — {result.pending} of {len(docs)} "
                     "report(s) still ungraded:\n\n"
                     + "\n".join(f"- {line}" for line in result.notes)
                     + f"\n\nThe {len(result.raw_grades)} graded report(s) are "
-                    "saved. Run grading again once the provider is available "
-                    "(e.g. its quota resets) — only the remaining reports are "
-                    "graded, then the whole cohort is calibrated."
+                    "saved. Resume once the provider is available again (e.g. "
+                    "its quota resets) — only the remaining reports are graded, "
+                    "then the whole cohort is calibrated."
                 )
+                st.rerun()
             elif result.raw_grades:
                 st.session_state["batch_result"] = result
                 st.session_state["_batch_result_docs"] = _docs_fingerprint(docs)

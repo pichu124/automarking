@@ -215,6 +215,29 @@ def test_saved_grades_are_never_reused_across_providers_or_changed_inputs():
     assert edited.graded == ["d0.txt"]
 
 
+def test_a_reused_grade_keeps_its_audit_note():
+    class Overflow(FakeGrader):
+        def grade_report(self, *, source_name, report_text, **kw):
+            if len(report_text) > 10_000:
+                raise Exception("prompt is too long: 9000 tokens > 2000 maximum")
+            return super().grade_report(source_name=source_name, **kw)
+
+    cache: dict = {}
+    specs = [ProviderSpec("primary", label="primary")]
+    docs = [ParsedDocument("big.txt", "x" * 40_000)]
+    first = grade_batch_with_fallback(
+        specs, _session(), docs, builder=_builder({"primary": Overflow("primary")}), cache=cache
+    )
+    assert any("context window" in n for n in first.notes)
+
+    again = FakeGrader("primary")
+    resumed = grade_batch_with_fallback(
+        specs, _session(), docs, builder=_builder({"primary": again}), cache=cache
+    )
+    assert again.graded == []
+    assert any("context window" in n for n in resumed.notes)  # graded on trimmed text
+
+
 def test_summarize_samples_reads_full_and_compresses():
     from src.grading_engine import summarize_samples_with_fallback
 
