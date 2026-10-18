@@ -242,11 +242,42 @@ def _looks_binary(text: str) -> bool:
     return bad > len(sample) * 0.10
 
 
+# A worksheet cell holding a formula but no saved result (no or an empty <v>),
+# as script-written workbooks store them. A t="str" cell with an empty <v> is
+# a formula whose result IS "" (Excel and LibreOffice write those), not one.
+_UNCACHED_FORMULA_RE = re.compile(
+    rb"<(?:\w+:)?c(?:\s(?![^>]*\bt=[\"']str[\"'])[^>]*)?>\s*"
+    rb"<(?:\w+:)?f\b[^>]*>[^<]*</(?:\w+:)?f>\s*"
+    rb"(?:<(?:\w+:)?v\s*/>|<(?:\w+:)?v>\s*</(?:\w+:)?v>)?\s*"
+    rb"</(?:\w+:)?c>"
+)
+
+
+def _has_uncached_formula(data: bytes) -> bool:
+    # A regex scan costs ~10% of a read (an XML parse ~25%). A cell longer
+    # than the 64 KB overlap is missed and reads as blank, as before.
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for name in zf.namelist():
+            if not (name.startswith("xl/worksheets/") and name.endswith(".xml")):
+                continue
+            # Streamed: a sheet's XML can be many times the size of the upload.
+            with zf.open(name) as part:
+                tail = b""
+                while chunk := part.read(1 << 20):
+                    window = tail + chunk
+                    if _UNCACHED_FORMULA_RE.search(window):
+                        return True
+                    tail = window[-(1 << 16):]
+    return False
+
+
 def _read_xlsx(data: bytes) -> str:
     """Extract text from an Excel workbook, one row per line, sheets labelled.
 
     Rubrics and grade sheets often live in Excel. ``data_only=True`` returns
-    computed cell values instead of formula strings.
+    computed cell values instead of formula strings. A formula saved without
+    a result (a script-written workbook) shows its formula text instead, so
+    the grader still sees the working.
     """
     try:
         from openpyxl import load_workbook
@@ -257,17 +288,36 @@ def _read_xlsx(data: bytes) -> str:
         ) from exc
 
     workbook = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    formulas = None
     parts: List[str] = []
     try:
-        for sheet in workbook.worksheets:
+        # A second parse doubles the read time, so only when it is needed.
+        if _has_uncached_formula(data):
+            formulas = load_workbook(io.BytesIO(data), read_only=True)
+        for index, sheet in enumerate(workbook.worksheets):
             if len(workbook.worksheets) > 1:
                 parts.append(f"=== Sheet: {sheet.title} ===")
-            for row in sheet.iter_rows(values_only=True):
+            rows = sheet.iter_rows(values_only=True)
+            if formulas is not None:
+                # Same file, same parser: the two passes' rows line up.
+                rows = (
+                    tuple(
+                        # An ArrayFormula keeps its formula in .text.
+                        getattr(f, "text", f) if v is None else v
+                        for v, f in zip(row, formula_row)
+                    )
+                    for row, formula_row in zip(
+                        rows, formulas.worksheets[index].iter_rows(values_only=True)
+                    )
+                )
+            for row in rows:
                 cells = ["" if v is None else str(v).strip() for v in row]
                 if any(cells):
                     parts.append(" | ".join(cells).rstrip(" |"))
     finally:
         workbook.close()
+        if formulas is not None:
+            formulas.close()
     return "\n".join(parts)
 
 
