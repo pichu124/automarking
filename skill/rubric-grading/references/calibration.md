@@ -25,7 +25,10 @@
   the work. Tell the professor the mean will drop (by roughly
   (50 - their marks) / N) and ask whether to recalibrate the rest.
 - **Pin a mark**: `--fixed s1=50,s2=35.2` (e.g. "raise X to 50 and Y by the
-  same amount").
+  same amount"). Pinned students are outside calibration: the target mean and
+  caps apply to everyone else, then the pinned marks are inserted unchanged
+  (the summary's final_mean and band counts exclude them). The whole-class
+  mean therefore moves with the pins - tell the professor.
 - **Raise/lower the mean without changing anyone's band**:
   `--preserve-bands WORK/finals_previous.json --mean 67` - everyone shifts
   together but stays inside their previous band (capped at 1.5 below the next

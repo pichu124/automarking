@@ -133,3 +133,39 @@ def test_export_lists_cap_ties_by_name(tmp_path):
     text = "\n".join(p.text for p in Document(out).paragraphs)
     assert ("held at the lower band: Le Thi Ngoc (s4200000) (raw 85, Distinction), "
             "Le Thi Ngoc (s4200001) (raw 85, Distinction)") in text
+
+
+# --- B: --fixed marks sit outside calibration ---------------------------------
+
+PINNED = ["s4200000", "s4200001", "s4200002"]
+
+
+def test_fixed_marks_are_outside_calibration(tmp_path):
+    rest = {s: t for s, t in COHORT.items() if s not in PINNED}
+    code, _, err, alone = calibrate(subdir(tmp_path, "alone"), totals=rest)
+    assert code == 0, err
+
+    code, _, err, out = calibrate(tmp_path, "--fixed", ",".join(f"{s}=35" for s in PINNED))
+
+    assert code == 0, err
+    data = json.loads(out.read_text(encoding="utf-8"))
+    expected = json.loads(alone.read_text(encoding="utf-8"))["finals"]
+    assert data["finals"] == {**expected, **{s: 35.0 for s in PINNED}}
+    assert 65.0 <= data["summary"]["final_mean"] <= 66.0
+    assert data["summary"]["fixed"] == PINNED
+
+
+def test_preserve_bands_targets_the_mean_of_the_non_fixed(tmp_path):
+    code, _, err, prev = calibrate(tmp_path)
+    assert code == 0, err
+    out = tmp_path / "lifted.json"
+
+    code, _, err = run("calibrate.py", "--results", tmp_path / "results", "--out", out,
+                       "--preserve-bands", prev, "--mean", "67",
+                       "--fixed", ",".join(f"{s}=35" for s in PINNED))
+
+    assert code == 0, err
+    finals = json.loads(out.read_text(encoding="utf-8"))["finals"]
+    others = [v for s, v in finals.items() if s not in PINNED]
+    assert abs(sum(others) / len(others) - 67) <= 0.1
+    assert all(finals[s] == 35.0 for s in PINNED)

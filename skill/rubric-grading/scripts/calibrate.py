@@ -20,7 +20,9 @@ HD cap (score >= 80) and DI cap (70-79) as % of cohort, soft floor at 50, and
 optional avoidance of 59/69/79 (scores in [T-guard, T) pushed to T-guard).
 If the cohort ends up with no HD, the DI cap widens to --di-no-hd.
 --no-floor: these students keep raw + the cohort shift (within 0-100) instead of the floor.
---fixed:    pin exact finals (they still count toward the cohort mean).
+--fixed:    pin exact finals. Pinned students are outside calibration: the target
+            mean and the caps apply to everyone else, then the pinned marks are
+            inserted unchanged.
 Students with equal raw totals are never split across the HD/DI cap: a tie
 straddling a cap goes to the lower band as a whole and is listed in
 summary["cap_ties"] as [sid, raw %, band held at].
@@ -73,7 +75,7 @@ def main() -> None:
     ap.add_argument("--guard", type=float, default=1.5)
     ap.add_argument("--no-avoid", action="store_true")
     ap.add_argument("--no-floor", default="")
-    ap.add_argument("--fixed", default="")
+    ap.add_argument("--fixed", default="", help="s1=50,s2=35.2 - pinned finals (0-100), outside calibration")
     ap.add_argument("--preserve-bands", default="")
     a = ap.parse_args()
 
@@ -98,7 +100,9 @@ def main() -> None:
             f"calibrate.py: unknown student id(s) in --fixed/--no-floor: {', '.join(unknown)} "
             f"(no such sid in {a.results}). Nothing was written."
         )
-    n = len(raw)
+    ids = [s for s in raw if s not in fixed]  # pinned students are outside calibration
+    if not ids:
+        sys.exit("calibrate.py: every student is pinned with --fixed - nothing to calibrate. Nothing was written.")
     guard = max(a.guard, 1.5)
     cap_ties = []
 
@@ -108,7 +112,6 @@ def main() -> None:
         # The bands were set under the previous run's caps.
         diag = {k: v for k, v in prev_run.get("summary", {}).items() if k in ("hd_cap", "di_cap")}
         cap_ties = [t for t in prev_run.get("summary", {}).get("cap_ties", []) if t[0] not in fixed]
-        ids = [s for s in raw if s not in fixed]
         missing = [s for s in ids if s not in prev]
         if missing:
             sys.exit(
@@ -126,11 +129,10 @@ def main() -> None:
         lo, hi = -40.0, 40.0
         for _ in range(100):
             mid = (lo + hi) / 2
-            m = (sum(finals_for(mid).values()) + sum(fixed.values())) / n
+            m = sum(finals_for(mid).values()) / len(ids)
             lo, hi = (mid, hi) if m < a.mean else (lo, mid)
         shift = (lo + hi) / 2
         finals = finals_for(shift)
-        finals.update(fixed)
         mode, widened = "band-preserving", False
     else:
         cfg = dataclasses.replace(
@@ -140,30 +142,31 @@ def main() -> None:
             di_cap_fraction_no_hd=a.di_no_hd / 100,
             avoid_band_boundaries=not a.no_avoid, boundary_guard=guard,
         )
-        ids = list(raw)
         fin, rep = calibrate_scores([raw[s] for s in ids], cfg)
         finals = dict(zip(ids, fin))
         shift = rep.shift
         for s in no_floor:
             finals[s] = round(min(100.0, max(0.0, raw[s] + shift)), 1)
-        finals.update(fixed)
         cap_ties = [(ids[i], r, held) for i, r, held in rep.cap_ties]
         mode, widened = "standard", rep.di_cap_widened
         diag = {"hd_cap": rep.hd_cap, "di_cap": rep.di_cap, "raw_std": rep.raw_std,
                 "low_discrimination": rep.low_discrimination}
 
-    vals = list(finals.values())
-    order = sorted(raw, key=lambda s: -raw[s])
-    inversions = [(x, y) for x, y in zip(order, order[1:]) if finals[x] < finals[y] - 0.01 and x not in fixed and y not in fixed]
-    boundary = [s for s, v in finals.items() for T in (60, 70, 80) if not a.no_avoid and T - guard < v < T]
+    vals = [finals[s] for s in ids]
+    order = sorted(ids, key=lambda s: -raw[s])
+    inversions = [(x, y) for x, y in zip(order, order[1:]) if finals[x] < finals[y] - 0.01]
+    boundary = [s for s in ids for T in (60, 70, 80) if not a.no_avoid and T - guard < finals[s] < T]
+    finals = {s: fixed[s] if s in fixed else finals[s] for s in raw}
     summary = {
-        "mode": mode, "n": n, "raw_mean": round(statistics.mean(raw.values()), 2),
+        "mode": mode, "n": len(ids), "raw_mean": round(statistics.mean(raw[s] for s in ids), 2),
         "final_mean": round(statistics.mean(vals), 2), "shift": round(shift, 2),
         "hd": sum(v >= 80 for v in vals), "di": sum(70 <= v < 80 for v in vals),
         "cr": sum(60 <= v < 70 for v in vals), "pa": sum(50 <= v < 60 for v in vals),
         "fail": sum(v < 50 for v in vals), "di_cap_widened": widened, **diag,
         "rank_inversions": inversions, "boundary_scores": boundary,
     }
+    if fixed:
+        summary["fixed"] = sorted(fixed)
     if cap_ties:
         summary["cap_ties"] = cap_ties
     json.dump({"finals": finals, "summary": summary}, open(a.out, "w", encoding="utf-8"), indent=1)
