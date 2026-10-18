@@ -44,26 +44,30 @@ class ParsedDocument:
 def _read_docx(data: bytes) -> str:
     try:
         document = docx.Document(io.BytesIO(data))
+        body = document.element.body
+        parts = [
+            _parse_docx_xml(rel.target_part.blob)
+            for rel in document.part.rels.values()
+            if rel.reltype in (RT.FOOTNOTES, RT.ENDNOTES, RT.HEADER, RT.FOOTER)
+        ]
     except Exception:
         # python-docx refuses slightly-broken packages outright — e.g. a
         # dangling relationship to a deleted image ("There is no item named
         # 'word/media/imageN.png' in the archive") after a bad edit/repair.
-        # The same goes for XML with raw control characters. The text itself
-        # is intact in word/document.xml, so read the XML parts straight from
-        # the zip instead of failing the submission.
+        # The same goes for XML with raw control characters and for "Strict
+        # Open XML" files (other namespaces). The text itself is intact in
+        # word/document.xml, so read the XML parts straight from the zip
+        # instead of failing the submission.
         return _docx_xml_text(data)
-    parts = [
-        _parse_docx_xml(rel.target_part.blob)
-        for rel in document.part.rels.values()
-        if rel.reltype in (RT.FOOTNOTES, RT.ENDNOTES, RT.HEADER, RT.FOOTER)
-    ]
-    return _docx_text(document.element.body, parts)
+    return _docx_text(body, parts)
 
 
 def _docx_xml_text(data: bytes) -> str:
     """Same extraction as _read_docx, locating the parts by their usual names."""
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         body = _parse_docx_xml(zf.read("word/document.xml"))
+        if body is None:
+            raise ValueError("word/document.xml is not readable XML")
         parts = [
             _parse_docx_xml(zf.read(n)) for n in zf.namelist()
             if re.fullmatch(r"word/(footnotes|endnotes|header\d*|footer\d*)\.xml", n)
@@ -76,8 +80,24 @@ def _docx_xml_text(data: bytes) -> str:
 _DOCX_XML_PARSER = etree.XMLParser(recover=True, resolve_entities=False)
 
 
+# "Strict Open XML Document" (a Save As choice in Word) uses its own namespace
+# URIs for the same elements; map them onto the Transitional ones we match.
+_STRICT_NAMESPACES = (
+    (b"http://purl.oclc.org/ooxml/wordprocessingml/main",
+     b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+    (b"http://purl.oclc.org/ooxml/officeDocument/math",
+     b"http://schemas.openxmlformats.org/officeDocument/2006/math"),
+)
+
+
 def _parse_docx_xml(blob: bytes):
-    return etree.fromstring(blob, _DOCX_XML_PARSER)
+    """Root element of an XML part, or None when it is empty or unreadable."""
+    for strict, transitional in _STRICT_NAMESPACES:
+        blob = blob.replace(strict, transitional)
+    try:
+        return etree.fromstring(blob, _DOCX_XML_PARSER)
+    except etree.XMLSyntaxError:  # empty part: even recover=True gives up
+        return None
 
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -107,7 +127,10 @@ def _docx_text(body, parts) -> str:
     """Body text in document order, then notes and headers/footers."""
     lines = _docx_blocks(body)
     for heading, tags in _DOCX_EXTRA_PARTS:
-        extra = [line for root in parts if root.tag in tags for line in _docx_blocks(root)]
+        extra = [
+            line for root in parts if root is not None and root.tag in tags
+            for line in _docx_blocks(root)
+        ]
         if extra:
             lines += ["", heading, *extra]
     return "\n".join(lines).strip()

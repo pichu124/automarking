@@ -10,6 +10,7 @@ import io
 import zipfile
 
 import docx
+import pytest
 from docx.oxml import parse_xml
 
 from src.document_parser import parse_bytes
@@ -204,3 +205,50 @@ def test_broken_package_reads_exactly_like_an_intact_one():
     # raw-XML reader takes over; it must not lose or duplicate anything.
     intact = _rich_docx()
     assert _text(_with_dangling_rel(intact)) == _text(intact)
+
+
+def _replace_bytes(data: bytes, pairs, members=lambda name: True) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as zin, zipfile.ZipFile(out, "w") as zout:
+        for item in zin.infolist():
+            blob = zin.read(item.filename)
+            if members(item.filename):
+                for old, new in pairs:
+                    blob = blob.replace(old, new)
+            zout.writestr(item, blob)
+    return out.getvalue()
+
+
+_TO_STRICT = (
+    (b"http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+     b"http://purl.oclc.org/ooxml/wordprocessingml/main"),
+    (b"http://schemas.openxmlformats.org/officeDocument/2006/math",
+     b"http://purl.oclc.org/ooxml/officeDocument/math"),
+)
+_STRICT_RELS = (
+    (b"http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+     b"http://purl.oclc.org/ooxml/officeDocument/relationships"),
+)
+
+
+@pytest.mark.parametrize("strict_rels", [True, False])
+def test_strict_open_xml_reads_like_transitional(strict_rels):
+    # Word's "Strict Open XML Document" save option renames every namespace;
+    # python-docx can't open it (or opens it without a body), so the raw-XML
+    # reader must map the names back rather than return nothing.
+    intact = _rich_docx()
+    pairs = _TO_STRICT + (_STRICT_RELS if strict_rels else ())
+    strict = _replace_bytes(intact, pairs)
+    assert _text(strict) == _text(intact)
+
+
+@pytest.mark.parametrize("junk", [b"", b"\x00\x01 not xml at all"])
+def test_unreadable_footnotes_part_does_not_lose_the_body(junk):
+    data = _with_notes(_docx(_p("Body survives.")), "", "")
+    data = _replace_bytes(
+        data, [(f"<w:footnotes {_NS}></w:footnotes>".encode(), junk)],
+        members=lambda name: name == "word/footnotes.xml",
+    )
+    text = _text(data)
+    assert "[Could not read" not in text
+    assert "Body survives." in text
