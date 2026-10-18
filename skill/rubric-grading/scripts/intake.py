@@ -35,8 +35,9 @@ STRICT_ID_RE = re.compile(r"(?<![A-Za-z0-9])[sS]([34]\d{6})(?!\d)")
 # On the cover page (first 3000 chars) a bare number counts only right after an
 # ID label - "capital AUD 3000000" must not become student s3000000.
 COVER_ID_RE = re.compile(
-    r"(?:(?:\bstudent\s*(?:id|number|no)|\bid\s*no|\bid|\bm[ãa]\s*sv|\bmssv"
-    r"|\bm[ãa]\s*s[ốo]\s*sinh\s*vi[êe]n)[\s:.#-]*[sS]?|(?<![A-Za-z0-9])[sS])([34]\d{6})(?!\d)",
+    r"(?:(?:\bstudent\s*(?:id|number|no)(?:\s*(?:number|no))?|\bid\s*(?:no|number)|\bid"
+    r"|\bm[ãa]\s*sv|\bmssv|\bm[ãa]\s*s[ốo]\s*sinh\s*vi[êe]n)[\s:.#|-]*[sS]?"
+    r"|(?<![A-Za-z0-9])[sS])([34]\d{6})(?!\d)",
     re.IGNORECASE,
 )
 DOC_EXTS = ("docx", "pdf", "txt", "md")
@@ -61,12 +62,17 @@ def _workbook_extract(data: bytes, rows: int = 60, cols: int = 40) -> tuple[str,
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    # A formula saved without its result (script-written workbooks) reads as
+    # None above; show the formula text instead so the working stays visible.
+    fwb = load_workbook(io.BytesIO(data), read_only=True)
     out, sheets = [], []
-    for ws in wb.worksheets:
+    for ws, fws in zip(wb.worksheets, fwb.worksheets):
         sheets.append(f"{ws.title}({ws.max_row})")
         out.append(f"\n=== Sheet: {ws.title} (max_row={ws.max_row}, max_col={ws.max_column}) ===")
         n = 0
-        for row in ws.iter_rows(values_only=True):
+        for row, frow in zip(ws.iter_rows(values_only=True), fws.iter_rows(values_only=True)):
+            row = [f if v is None and isinstance(f, str) and f.startswith("=") else v
+                   for v, f in zip(row, frow)]
             cells = ["" if v is None else str(v)[:28] for v in row[:cols]]
             if any(cells):
                 out.append(" | ".join(cells).rstrip(" |")[:360])

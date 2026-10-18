@@ -1063,26 +1063,40 @@ def grade_ui() -> None:
     _render_results()
 
 
-def _cap_ties_message(calib, raw_grades=()) -> str | None:
-    """Students whose raw total tied with others across an HD/DI cap boundary
-    and were held, as a group, at the lower band — for the professor to review.
-    ``cap_ties`` indexes the raw-score order, which ``raw_grades`` keeps."""
-    ties = getattr(calib, "cap_ties", None)
-    if not ties:
-        return None
-
+def _named_cap_ties(calib, raw_grades=()) -> list:
+    """``cap_ties`` with each raw-score-order index swapped for the student's
+    name — ``raw_grades`` keeps that order (``reports`` is re-sorted)."""
     def who(i: int) -> str:
         if i < len(raw_grades):
             source, graded = raw_grades[i]
             return graded.student_identifier or source
         return f"#{i + 1}"
 
-    listed = "; ".join(f"{who(i)} (raw {raw:g}, held at {band})" for i, raw, band in ties)
+    return [(who(i), raw, band) for i, raw, band in getattr(calib, "cap_ties", None) or []]
+
+
+def _cap_ties_message(calib, raw_grades=()) -> str | None:
+    """Students whose raw total tied with others across an HD/DI cap boundary
+    and were held, as a group, at the lower band — for the professor to review."""
+    ties = _named_cap_ties(calib, raw_grades)
+    if not ties:
+        return None
+    listed = "; ".join(f"{who} (raw {raw:g}, held at {band})" for who, raw, band in ties)
     return (
         "⚖️ **Tied at a cap boundary.** These students had the same raw score "
         "as students above the HD/DI cap, so the whole tie was held at the lower "
         f"band (the cap is a hard maximum): {listed}. Raise any of them by hand "
         "if you decide otherwise."
+    )
+
+
+def _grade_report_docx(result, title: str) -> bytes:
+    """The Word grade report, with tie cases named (not raw-order indices)."""
+    calib = result.calibration
+    if calib is not None and getattr(calib, "cap_ties", None):
+        calib = dataclasses.replace(calib, cap_ties=_named_cap_ties(calib, result.raw_grades))
+    return build_grade_document(
+        result.reports, title, calib, graded_by=result.provider_label
     )
 
 
@@ -1180,11 +1194,8 @@ def _render_results() -> None:
             use_container_width=True,
         )
 
-        docx_bytes = build_grade_document(
-            result.reports,
-            st.session_state["session_name"] or "Untitled session",
-            calib,
-            graded_by=result.provider_label,
+        docx_bytes = _grade_report_docx(
+            result, st.session_state["session_name"] or "Untitled session"
         )
         st.download_button(
             "📄 Download Word grade report (.docx)",

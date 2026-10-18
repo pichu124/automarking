@@ -78,10 +78,18 @@ def main() -> None:
 
     vals = [r.final_total for r in reports]
     raws = [r.raw_total for r in reports]
+
+    def cap(key: str, lo: float, hi: float):
+        # --fixed students sit outside calibration, so the cap excludes them;
+        # say so when one lands in the band rather than show "2 (cap 1)".
+        k = sum(lo <= float(finals[s]) < hi for s in summ.get("fixed", []) if s in finals)
+        c = summ.get(key, "n/a")
+        return f"{c} + {k} pinned" if k and c != "n/a" else c
+
     calib = CalibrationReport(
         n=len(vals), raw_mean=round(statistics.mean(raws), 2), final_mean=round(statistics.mean(vals), 2),
         hd_count=sum(v >= 80 for v in vals), di_count=sum(70 <= v < 80 for v in vals),
-        fail_count=sum(v < 50 for v in vals), hd_cap=summ.get("hd_cap", "n/a"), di_cap=summ.get("di_cap", "n/a"),
+        fail_count=sum(v < 50 for v in vals), hd_cap=cap("hd_cap", 80, 101), di_cap=cap("di_cap", 70, 80),
         shift=summ.get("shift", 0.0), raw_std=round(statistics.pstdev(raws), 2) if len(raws) > 1 else 0.0,
         distinct_finals=len(set(vals)), di_cap_widened=bool(summ.get("di_cap_widened")),
         cap_ties=[(idents.get(sid, sid), raw, held) for sid, raw, held in summ.get("cap_ties", [])],

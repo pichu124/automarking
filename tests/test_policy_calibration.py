@@ -230,6 +230,7 @@ def test_bare_number_without_label_is_not_a_student_id(tmp_path):
 @pytest.mark.parametrize("label", [
     "Student ID:", "student id -", "Student No.", "Student number", "ID:", "ID No:",
     "Mã SV:", "MSSV", "Mã số sinh viên:", unicodedata.normalize("NFD", "Mã số sinh viên:"),
+    "Student ID Number:", "ID number:", "Student ID |",
 ])
 def test_bare_number_after_a_label_is_the_student_id(tmp_path, label):
     ids, _ = _intake_ids(tmp_path, f"Initial capital AUD 3000000\n{label} 4123456\n")
@@ -255,3 +256,60 @@ def test_app_lists_students_held_at_the_lower_band(monkeypatch):
     message = app._cap_ties_message(report)
     assert "lower band" in message and "85" in message
     assert app._cap_ties_message(calibrate_scores([90, 70, 60], CalibrationConfig())[1]) is None
+
+
+def test_app_word_export_names_tied_students(monkeypatch):
+    for key in ("ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(key, "dummy")
+    from types import SimpleNamespace
+
+    import app
+    from src.calibration import CalibrationConfig
+    from src.grading_engine import _finalize
+    from src.models import ComponentGrade, GradingResult
+
+    raw = [90, 90, 70, 65, 60, 58, 55, 50, 45, 40]
+    graded = [
+        (f"s41000{i:02d}.docx", GradingResult(
+            student_identifier=f"Student {i}", total=t,
+            components=[ComponentGrade(name="All", score=t, max_score=100, notes=["-"])]))
+        for i, t in enumerate(raw)
+    ]
+    reports, calib = _finalize(graded, CalibrationConfig(hd_cap_fraction=0.1))
+    assert calib.cap_ties, "fixture must straddle the HD cap"
+    result = SimpleNamespace(reports=reports, calibration=calib, raw_grades=graded,
+                             provider_label="fake")
+
+    text = "\n".join(p.text for p in Document(io.BytesIO(app._grade_report_docx(result, "T"))).paragraphs)
+
+    assert "held at the lower band: Student 0 (raw 90" in text
+    assert "Student 1 (raw 90" in text
+
+
+def test_export_marks_pinned_students_beside_the_caps(tmp_path):
+    pin = next(iter(COHORT))
+    assert calibrate(tmp_path, "--fixed", f"{pin}=85")[0] == 0
+    out = tmp_path / "grades.docx"
+
+    code, _, err = run("export_docx.py", "--results", tmp_path / "results",
+                       "--finals", tmp_path / "finals.json", "--title", "T", "--out", out)
+
+    assert code == 0, err
+    cells = [c.text for t in Document(out).tables for row in t.rows for c in row.cells]
+    assert any("+ 1 pinned)" in c for c in cells), cells[:12]
+
+
+def test_intake_pack_shows_formulas_saved_without_a_result(tmp_path):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.active.append(["Total", "=SUM(1,2)", 7])
+    src = tmp_path / "s4123456_calc.xlsx"
+    wb.save(src)
+
+    code, _, err = run("intake.py", "--work", tmp_path / "work", src)
+
+    assert code == 0, err
+    packs = list((tmp_path / "work" / "packs" / "s4123456").glob("workbook_*.txt"))
+    assert packs, "intake must build a workbook extract"
+    assert "Total | =SUM(1,2) | 7" in packs[0].read_text(encoding="utf-8")
